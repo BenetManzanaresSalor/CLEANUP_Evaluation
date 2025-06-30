@@ -1,6 +1,6 @@
 #region Imports
 
-import json, re, abc, argparse, math, ntpath, os, csv
+import json, re, abc, argparse, math, ntpath, os, csv, gc #TODO: Check why ntpath unused
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 from dataclasses import dataclass
@@ -20,13 +20,16 @@ from transformers import AutoModel
 from sklearn.cluster import KMeans
 from sklearn.metrics import normalized_mutual_info_score
 
-# TODO: Apply logging instead of prints
 import logging
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s', level=logging.INFO) # Configure logging
 
 #endregion
 
+
 #region Constants
+
+
+#region Input settings
 
 # Configuration dictionary keys
 CORPUS_CONFIG_KEY = "corpus_filepath"
@@ -37,6 +40,9 @@ MANDATORY_CONFIG_KEYS = [CORPUS_CONFIG_KEY, ANONYMIZATIONS_CONFIG_KEY, RESULTS_C
 
 # Corpus dictionary keys
 DOC_ID_KEY = "doc_id"
+TEXT_KEY = "text"
+GOLD_ANNOTATIONS_KEY = "annotations"
+ENTITY_MENTIONS_KEY = "entity_mentions"
 
 # Metric names
 PRECISION_METRIC_NAME = "Precision"
@@ -47,6 +53,16 @@ NMI_METRIC_NAME = "NMI"
 TRIR_METRIC_NAME = "TRIR"
 METRIC_NAMES = [PRECISION_METRIC_NAME, RECALL_METRIC_NAME, TPI_METRIC_NAME, TPS_METRIC_NAME, NMI_METRIC_NAME, TRIR_METRIC_NAME]
 
+#endregion
+
+
+#region General settings
+
+SPACY_MODEL_NAME = "en_core_web_md"
+IC_WEIGHTING_MODEL_NAME = "google-bert/bert-base-uncased"
+TOKEN_WEIGHTING_KEY = "token_weighting"
+IC_WEIGHTING_NAME="IC"
+IC_WEIGHTING_MAX_SEGMENT_SIZE = 100
 
 # POS tags, tokens or characters that can be ignored from the recall scores 
 # (because they do not carry much semantic content, and there are discrepancies
@@ -55,26 +71,56 @@ POS_TO_IGNORE = {"ADP", "PART", "CCONJ", "DET"}
 TOKENS_TO_IGNORE = {"mr", "mrs", "ms", "no", "nr", "about"}
 CHARACTERS_TO_IGNORE = " ,.-;:/&()[]–'\" ’“”"
 
-
-#TODO: Manage constants from document clustering
-# To avoid: \sklearn\cluster\_kmeans.py:1382: UserWarning: KMeans is known to have a memory leak on Windows with MKL, when there are less chunks than available threads. You can avoid it by setting the environment variable OMP_NUM_THREADS=3
-os.environ["OMP_NUM_THREADS"] = "3"
-
-MODEL_NAME = "bert-base-cased" # Other options: "distilbert-base-uncased", "distilbert-base-cased", "bert-base-uncased", "roberta-base"
-
-MASK_MARKS = ["sensitive", "person", "dem", "loc",
-                        "org", "datetime", "quantity", "misc",
-                        "norp", "fac", "gpe", "product", "event",
-                        "work_of_art", "law", "language", "date",
-                        "time", "ordinal", "cardinal", "date_time", "datetime",
-                        "nrp", "location", "organization", "\*\*\*"]
-
 # Check for GPU with CUDA
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda:0")
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 else:
     DEVICE = torch.device("cpu")
+
+#endregion
+
+
+#region Metric-specific settings
+
+# Precision default settings
+PRECISION_TOKEN_LEVEL=True
+
+# Recall default settings
+RECALL_INCLUDE_DIRECT=True
+RECALL_INCLUDE_QUASI=True
+RECALL_TOKEN_LEVEL=True
+
+# TPI default settings
+TPI_TERM_ALTERNING = 6
+TPI_USE_CHUNKING = True
+
+# TPS default settings
+TPS_TERM_ALTERNING = 6
+TPS_USE_CHUNKING = True
+TPS_SIMILARITY_MODEL_NAME = "paraphrase-albert-base-v2" # From the Sentence-Transformers library
+
+
+# Default settings for NMI
+NMI_EMBEDDING_MODEL_NAME = "bert-base-cased" # Other options: "distilbert-base-uncased", "distilbert-base-cased", "bert-base-uncased", "roberta-base"
+NMI_EMBEDDING_SIZE = 768 # BERT embedding size
+NMI_REMOVE_MASK_MARKS = False
+NMI_MASK_MARKS = ["sensitive", "person", "dem", "loc",
+                        "org", "datetime", "quantity", "misc",
+                        "norp", "fac", "gpe", "product", "event",
+                        "work_of_art", "law", "language", "date",
+                        "time", "ordinal", "cardinal", "date_time", "datetime",
+                        "nrp", "location", "organization", "\*\*\*"]
+NMI_MAX_POOLING = False
+NMI_N_CLUSTERINGS = 5
+NMI_N_TRIES_PER_CLUSTERING = 50
+os.environ["OMP_NUM_THREADS"] = "3" # To avoid: \sklearn\cluster\_kmeans.py:1382: UserWarning: KMeans is known to have a memory leak on Windows with MKL, when there are less chunks than available threads. You can avoid it by setting the environment variable OMP_NUM_THREADS=3
+
+
+#TODO: Default settings for TPI
+
+#endregion
+
 
 #endregion
 
@@ -93,18 +139,29 @@ class MaskedDocument:
     masked_spans : List[Tuple[int, int]]
     replacements : List[str]
 
-    def get_masked_offsets(self):
-        """Returns the character offsets that are masked"""
+    def get_masked_offsets(self) -> set:
+        """Returns the character offsets/indices that are masked"""
         if not hasattr(self, "masked_offsets"):
             self.masked_offsets = {i for start, end in self.masked_spans
                                    for i in range(start, end)}
         return self.masked_offsets
+    
+    def get_masked_text(self, original_text:str) -> str:
+        masked_text = ""+original_text
+        
+        for (start_idx, end_idx), replacement in zip(reversed(self.masked_spans), reversed(self.replacements)):
+            if replacement is None: # If there is no replacement, use empty string
+                replacement = ""
+            masked_text = masked_text[:start_idx] + replacement + masked_text[end_idx:]
+        
+        return masked_text
 
 @dataclass
-class MaskedDocumentList(List[MaskedDocument]):
+class MaskedCorpus(List[MaskedDocument]):
     def __init__(self, masked_docs_filepath:str):
         """Given a file path for a JSON file containing the spans to be masked for
         each document, builds a list of MaskedDocument objects"""
+
         masked_docs_list = []
         
         with open(masked_docs_filepath, "r", encoding="utf-8") as fd:
@@ -129,7 +186,7 @@ class MaskedDocumentList(List[MaskedDocument]):
                 replacement = None if len(elems) < 3 or elems[2].strip() == "" else elems[2]
                 doc.replacements.append(replacement)
                 
-            masked_docs_list.append(doc)        
+            masked_docs_list.append(doc)
 
         # Create the class from the list
         super().__init__(masked_docs_list)
@@ -152,24 +209,24 @@ class AnnotatedEntity:
             raise RuntimeError("Direct identifiers must always be masked")
 
     @property
-    def mentions_to_mask(self):
+    def mentions_to_mask(self) -> list:
         return [mention for i, mention in enumerate(self.mentions)
                 if self.mention_level_masking[i]]
 
-class GoldDocument:
+class Document:
     """Representation of a gold standard annotated document"""
 
     doc_id:str
     text:str
-    spacy_docs:spacy.tokens.Doc
-    entities:dict
+    spacy_doc:spacy.tokens.Doc
+    annotated_entities:Dict[str, AnnotatedEntity]
 
     #region Initialization
     
-    def __init__(self, doc_id:str, text:str, annotations:Dict[str,List],
+    def __init__(self, doc_id:str, text:str, gold_annotations:Dict[str,List],
                  spacy_doc:spacy.tokens.Doc):
         """Creates a new annotated document with an identifier, a text content, and 
-        a set of annotations (see guidelines)"""
+        a set of gold annotations"""
         
         # The (unique) document identifier, its text and the spacy document
         self.doc_id = doc_id
@@ -177,25 +234,25 @@ class GoldDocument:
         self.spacy_doc = spacy_doc
         
         # Annotated entities (indexed by id)
-        self.entities = {}        
-        for annotator, ann_by_person in annotations.items():
+        self.annotated_entities = {}        
+        for annotator, ann_by_person in gold_annotations.items():
             
-            if "entity_mentions" not in ann_by_person:
-                raise RuntimeError("Annotations must include entity_mentions")
+            if ENTITY_MENTIONS_KEY not in ann_by_person:
+                raise RuntimeError(f"Gold annotations of document {self.doc_id} are missing the {ENTITY_MENTIONS_KEY} key for annotator {annotator}")
             
-            for entity in self._get_entities_from_mentions(ann_by_person["entity_mentions"]):
+            for entity in self._get_entities_from_mentions(ann_by_person[ENTITY_MENTIONS_KEY]):
                 
                 # We require each entity_id to be specific for each annotator
-                if entity.entity_id in self.entities:
-                    raise RuntimeError(f"Entity ID {entity.entity_id} already used by another annotator")
+                if entity.entity_id in self.annotated_entities:
+                    raise RuntimeError(f"Gold annotations of document {self.doc_id} have an entity ID repeated by multiple annotators: {entity.entity_id}")
                     
                 entity.annotator = annotator
                 entity.doc_id = doc_id
-                self.entities[entity.entity_id] = entity
+                self.annotated_entities[entity.entity_id] = entity
                     
-    def _get_entities_from_mentions(self, entity_mentions):
-        """Returns a set of entities based on the annotated mentions"""
-        
+    def _get_entities_from_mentions(self, entity_mentions:List[dict]) -> List[AnnotatedEntity]:
+        """Returns a set of entities based on the annotated mentions"""       
+
         entities = {}
         
         for mention in entity_mentions:
@@ -235,7 +292,7 @@ class GoldDocument:
         for entity in entities.values():
             if set(entity.mention_level_masking) != {entity.need_masking}:
                 entity.need_masking = True
-                #print(f"Warning: inconsistent masking of entity {entity.entity_id}: {entity.mention_level_masking}") # TODO: Check this
+                #logging.info(f"Warning: inconsistent masking of entity {entity.entity_id}: {entity.mention_level_masking}") # TODO: Check this
                 
         return list(entities.values())
     
@@ -243,7 +300,7 @@ class GoldDocument:
 
     #region Functions
 
-    def is_masked(self, masked_doc:MaskedDocument, entity: AnnotatedEntity):
+    def is_masked(self, masked_doc:MaskedDocument, entity:AnnotatedEntity) -> bool:
         """Given a document with a set of masked text spans, determines whether entity
         is fully masked (which means that all its mentions are masked)"""
         
@@ -258,12 +315,12 @@ class GoldDocument:
                 return False
         return True
     
-    def is_mention_masked(self, masked_doc:MaskedDocument, mention_start:int, mention_end:int):
+    def is_mention_masked(self, masked_doc:MaskedDocument, mention_start:int, mention_end:int) -> bool:
         """Given a document with a set of masked text spans and a particular mention span,
         determine whether the mention is fully masked (taking into account special
-        characters or tokens to skip)"""
+        characters or PoS/tokens to ignore)"""
         
-        mention_to_mask = self.text[mention_start:mention_end].lower()
+        mention_to_mask = self.text[mention_start:mention_end].lower() #TODO: Check this unused var
                 
         # Computes the character offsets that must be masked
         offsets_to_mask = set(range(mention_start, mention_end))
@@ -274,7 +331,7 @@ class GoldDocument:
         # If we have not covered everything, we also make sure punctuations
         # spaces, titles, etc. are ignored
         if len(non_covered_offsets) > 0:
-            span = self.spacy_doc.char_span(mention_start, mention_end, alignment_mode = "expand")
+            span = self.spacy_doc.char_span(mention_start, mention_end, alignment_mode="expand")
             for token in span:
                 if token.pos_ in POS_TO_IGNORE or token.lower_ in TOKENS_TO_IGNORE:
                     non_covered_offsets -= set(range(token.idx, token.idx+len(token)))
@@ -285,12 +342,12 @@ class GoldDocument:
         # If that set is empty, we consider the mention as properly masked
         return len(non_covered_offsets) == 0
 
-    def get_entities_to_mask(self,  include_direct=True, include_quasi=True):
+    def get_entities_to_mask(self, include_direct:bool=True, include_quasi:bool=True) -> list:
         """Return entities that should be masked, and satisfy the constraints 
         specified as arguments"""
         
         to_mask = []
-        for entity in self.entities.values():     
+        for entity in self.annotated_entities.values():     
              
             # We only consider entities that need masking and are the right type
             if not entity.need_masking:
@@ -303,16 +360,15 @@ class GoldDocument:
                 
         return to_mask      
         
-    def get_annotators_for_span(self, start_token: int, end_token: int):
+    def get_annotators_for_span(self, start_token:int, end_token:int) -> set:
         """Given a text span (typically for a token), determines which annotators 
         have also decided to mask it. Concretely, the method returns a (possibly
-        empty) set of annotators names that have masked that span."""
-        
+        empty) set of annotators names that have masked that span."""        
         
         # We compute an interval tree for fast retrieval
         if not hasattr(self, "masked_spans"):
             self.masked_spans = intervaltree.IntervalTree()
-            for entity in self.entities.values():
+            for entity in self.annotated_entities.values():
                 if entity.need_masking:
                     for i, (start, end) in enumerate(entity.mentions):
                         if entity.mention_level_masking[i]:
@@ -327,7 +383,7 @@ class GoldDocument:
                     
         return annotators
 
-    def split_by_tokens(self, start: int, end: int):
+    def split_by_tokens(self, start:int, end:int):
         """Generates the (start, end) boundaries of each token included in this span"""
         
         for match in re.finditer(r"\w+", self.text[start:end]):
@@ -341,8 +397,8 @@ class TokenWeighting:
     """Abstract class for token weighting schemes"""
 
     @abc.abstractmethod
-    def get_weights(self, text:str, text_spans:List[Tuple[int,int]]):
-        """Given a text and a list of text spans, returns a list of numeric weights
+    def get_weights(self, text:str, text_spans:List[Tuple[int,int]]) -> np.ndarray:
+        """Given a text and a list of text spans, returns a NumPy array of numeric weights
         (of same length as the list of spans) representing the information content
         conveyed by each span.
 
@@ -353,26 +409,26 @@ class TokenWeighting:
 
         return
 
-class BertTokenWeighting(TokenWeighting):
+class ICTokenWeighting(TokenWeighting):
     """Token weighting based on a BERT language model. The weighting mechanism
     runs the BERT model on a text in which the provided spans are masked. The
-    weight of each token is then defined as -log(probability of the actual token value).
+    weight of each token is then defined as its information content:
+    -log(probability of the actual token value).
     
     In other words, a token that is difficult to predict will have a high
     information content, and therefore a high weight, whereas a token which can
-    be predicted from its content will received a low weight. """
+    be predicted from its content will received a low weight."""
     
-    def __init__(self, max_segment_size = 100):
-        """Initialises the BERT tokenizers and masked language model"""        
-        self.tokeniser = AutoTokenizer.from_pretrained('google-bert/bert-base-uncased')
-        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.model = AutoModelForMaskedLM.from_pretrained('google-bert/bert-base-uncased', trust_remote_code=True)
-        self.model = self.model.to(self.device)
-        
+    def __init__(self, max_segment_size:int=IC_WEIGHTING_MAX_SEGMENT_SIZE, model_name=IC_WEIGHTING_MODEL_NAME, device:str=DEVICE):
+        """Initialises the BERT tokenizers and masked language model"""
         self.max_segment_size = max_segment_size
-        
-        
-    def get_weights(self, text:str, text_spans:List[Tuple[int,int]]):
+        self.model_name = model_name
+        self.device = device
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.model = AutoModelForMaskedLM.from_pretrained(self.model_name, trust_remote_code=True)
+        self.model = self.model.to(self.device)
+            
+    def get_weights(self, text:str, text_spans:List[Tuple[int,int]]) -> np.ndarray:
         """Returns a list of numeric information content weights, where each value
         corresponds to -log(probability of predicting the value of the text span
         according to the BERT model).
@@ -381,7 +437,7 @@ class BertTokenWeighting(TokenWeighting):
         mininum of the probabilities for each token."""
         
         # STEP 1: we tokenise the text
-        bert_tokens = self.tokeniser(text, return_offsets_mapping=True)
+        bert_tokens = self.tokenizer(text, return_offsets_mapping=True)
         input_ids = bert_tokens["input_ids"]
         input_ids_copy = np.array(input_ids)
         
@@ -394,7 +450,7 @@ class BertTokenWeighting(TokenWeighting):
         for token_indices in tokens_by_span.values():
             for token_idx in token_indices:
                 attention_mask[token_idx] = 0
-                input_ids[token_idx] = self.tokeniser.mask_token_id
+                input_ids[token_idx] = self.tokenizer.mask_token_id
           
         # STEP 4: we run the masked language model     
         logits = self._get_model_predictions(input_ids, attention_mask)
@@ -421,8 +477,9 @@ class BertTokenWeighting(TokenWeighting):
             # We finally define the weight as -log(p)
             weights.append(-np.log(prob))
         
+        weights = np.array(weights) # Transform to NumPy array
+        
         return weights
-
 
     def _get_tokens_by_span(self, bert_token_spans, text_spans, text:str):
         """Given two lists of spans (one with the spans of the BERT tokens, and one with
@@ -443,10 +500,9 @@ class BertTokenWeighting(TokenWeighting):
         # And control that everything is correct
         for span_start, span_end in text_spans:
             if len(tokens_by_span[(span_start, span_end)]) == 0:
-                print(f"Warning: span ({span_start},{span_end}) without any token [{repr(text[span_start:span_end])}]")
+                logging.warning(f"Span ({span_start},{span_end}) without any token [{repr(text[span_start:span_end])}]")
         
         return tokens_by_span
-    
     
     def _get_model_predictions(self, input_ids, attention_mask):
         """Given tokenised input identifiers and an associated attention mask (where the
@@ -492,50 +548,50 @@ class BertTokenWeighting(TokenWeighting):
 
 class UniformTokenWeighting(TokenWeighting):
     """Uniform weighting (all tokens assigned to a weight of 1.0)"""
-    def get_weights(self, text:str, text_spans:List[Tuple[int,int]]):
-        return [1.0] * len(text_spans)
+    def get_weights(self, text:str, text_spans:List[Tuple[int,int]]) -> np.ndarray:
+        return np.ones(len(text_spans))
 
 
 #endregion
 
 
-#region Evaluator
+#region TAE
 
-class Evaluator:
-    """Representation of a the corpus for text anonymization, extracted from a JSON file.
-    Optionally, it can include gold annotations, standardly made by humans"""
+class TAE:
+    """Text Anonymization Evaluator (TAE), defined by the corpus for text anonymization.
+    Optionally, the corpus can include gold annotations, used for precision and recall metrics."""
 
-    documents:dict
+    documents:Dict[Document]
     nlp=None
 
     #region Initialization
     
-    def __init__(self, corpus:list, spacy_model_name:str="en_core_web_md"):
+    def __init__(self, corpus:list, spacy_model_name:str=SPACY_MODEL_NAME):
         # Documents indexed by identifier
         self.documents = {}
 
         # Loading the spaCy model
         self.nlp = spacy.load(spacy_model_name, disable=["lemmatizer"])        
 
-        for ann_doc in tqdm(corpus):
-            for key in [DOC_ID_KEY, "text", "annotations"]: #TODO: Annotations only needed for precision and recall
-                if key not in ann_doc:
-                    raise RuntimeError(f"Annotated document is not well formed: Missing variable {key}")
+        for doc in tqdm(corpus):
+            for key in [DOC_ID_KEY, TEXT_KEY, GOLD_ANNOTATIONS_KEY]: #TODO: Annotations only needed for precision and recall
+                if key not in doc:
+                    raise RuntimeError(f"Document {doc.doc_id} missing key {key}") #TODO: Rewrite all RuntimeErrors
             
             # Parsing the document with spaCy
-            spacy_doc = self.nlp(ann_doc["text"]) #TODO: Only create this if needed
+            spacy_doc = self.nlp(doc[TEXT_KEY]) #TODO: Only create this if needed
             
             # Creating the actual document (identifier, text and annotations)          
-            new_doc = GoldDocument(ann_doc[DOC_ID_KEY], ann_doc["text"],
-                                   ann_doc["annotations"], spacy_doc)
-            self.documents[ann_doc[DOC_ID_KEY]] = new_doc
+            new_doc = Document(doc[DOC_ID_KEY], doc[TEXT_KEY],
+                                   doc[GOLD_ANNOTATIONS_KEY], spacy_doc)
+            self.documents[doc[DOC_ID_KEY]] = new_doc
 
     #endregion
 
 
     #region Evaluation
 
-    def evaluate(self, anonymizations:Dict[List[MaskedDocument]], metrics:dict, results_filepath:Optional[str]=None, verbose:bool=False):
+    def evaluate(self, anonymizations:Dict[str, List[MaskedDocument]], metrics:dict, results_filepath:Optional[str]=None, verbose:bool=False) -> dict:
         results = {}
 
         #TODO: Check each anonymization has a masked version of all the documents in the corpus
@@ -545,25 +601,34 @@ class Evaluator:
 
         # For each metric
         for metric_name, parameters in metrics.items():
-            partial_eval_func = self._get_partial_eval_func(metric_name, parameters)
-            
-            # For each anonymization
-            metric_results = {}
-            for anon_name, masked_docs in anonymizations.items(): # TODO: This approach is not valid for NMI
-                # If is a valid metric, compute it
-                if not partial_eval_func is None:
-                    output = partial_eval_func(masked_docs)
-                    value = output[0] # First of the results is the actual value of the metric
-                    metric_results[anon_name] = value
-                # Otherwise, there are no results for this metric
-                else:
-                    metric_results[anon_name] = None
+            metric_key = metric_name.split("_")[0] # Text before first underscore is name of the metric, the rest is used for naming metric's variations
+            if TOKEN_WEIGHTING_KEY in parameters: # Replace token weighting string sentence by the proper instance of TokenWeighting
+                parameters[TOKEN_WEIGHTING_KEY] = ICTokenWeighting() if parameters[TOKEN_WEIGHTING_KEY]==IC_WEIGHTING_NAME else UniformTokenWeighting() #TODO: Remove model from ICweighting after used
+            partial_eval_func = self._get_partial_eval_func(metric_key, parameters)
 
-                if verbose:
-                    pass #TODO: Print results in a fancy way            
+            # For NMI, evaluate all anonymizations at once
+            if metric_key == NMI_METRIC_NAME:
+                output = self.get_NMI(anonymizations)
+                values = output[0] # First output component corresponds to vector of NMI values 
+                metric_results = {anon_name:value for anon_name, value in zip(anonymizations.keys(), values)}
+
+            # Otherwise, iterate through each anonymization
+            else:
+                metric_results = {}
+                for anon_name, masked_docs in anonymizations.items():
+                    # If is a valid metric, compute it
+                    if not partial_eval_func is None:
+                        output = partial_eval_func(masked_docs)
+                        value = output[0] if isinstance(output, tuple) else output  # If tuple, the first is the actual value of the metric #TODO: This fails for recall_per_entity_type
+                        metric_results[anon_name] = value
+                    # Otherwise, there are no results for this metric
+                    else:
+                        metric_results[anon_name] = None
 
             # Save results
             results[metric_name] = metric_results
+            if verbose:
+                pass #TODO: Print results in a fancy way
             if results_filepath:
                 self._write_into_results([metric_name]+list(metric_results.values()))
         
@@ -593,7 +658,13 @@ class Evaluator:
         return partial_func
 
     def _write_into_results(self, results_filepath:str, row:list):
-        with open(results_filepath, 'a+') as csvfile: #TODO: Create path to results if it does not exist
+        # Create containing directory if it does not exist
+        directory = os.path.dirname(results_filepath)
+        if directory and not os.path.exists(directory): # If it does not exist
+            os.makedirs(directory, exist_ok=True) # Create directory (including intermediate ones)
+
+        # Store the row of results
+        with open(results_filepath, 'a+') as csvfile:
             writer = csv.writer(csvfile)
             datetime_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")        
             writer.writerow([datetime_str]+row)
@@ -604,7 +675,7 @@ class Evaluator:
     #region Precision
             
     def get_precision(self, masked_docs:List[MaskedDocument], token_weighting:TokenWeighting, 
-                      token_level:bool=True):
+                      token_level:bool=PRECISION_TOKEN_LEVEL) -> float:
         """Returns the weighted, token-level precision of the masked spans when compared 
         to the gold standard annotations. Arguments:
         - masked_docs: documents together with spans masked by the system
@@ -614,7 +685,7 @@ class Evaluator:
         otherwise the precision is at the mention-level. The masked spans/tokens are weighted 
         by their information content, given the provided weighting scheme. If annotations from 
         several annotators are available for a given document, the precision corresponds to a 
-        micro-average over the annotators."""      
+        micro-average over the annotators."""
         
         weighted_true_positives = 0.0
         weighted_system_masks = 0.0
@@ -654,8 +725,8 @@ class Evaluator:
 
     #region Recall
 
-    def get_recall(self, masked_docs:List[MaskedDocument], include_direct=True, 
-                    include_quasi=True, token_level:bool=True):
+    def get_recall(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
+                    include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> float:
         """Returns the mention or token-level recall of the masked spans when compared 
         to the gold standard annotations. 
         
@@ -666,7 +737,7 @@ class Evaluator:
         - token_level: whether to compute the recall at the level of tokens or mentions
                 
         If annotations from several annotators are available for a given document, the recall 
-        corresponds to a micro-average over the annotators. """
+        corresponds to a micro-average over the annotators."""
 
         nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
                                                                   include_quasi, token_level)
@@ -679,8 +750,8 @@ class Evaluator:
         except ZeroDivisionError:
             return 0
 
-    def get_recall_per_entity_type(self, masked_docs:List[MaskedDocument], include_direct=True, 
-                                   include_quasi=True, token_level:bool=True):
+    def get_recall_per_entity_type(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
+                                   include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> dict:
         """Returns the mention or token-level recall of the masked spans when compared 
         to the gold standard annotations, and factored by entity type. 
         
@@ -691,7 +762,7 @@ class Evaluator:
         - token_level: whether to compute the recall at the level of tokens or mentions
                 
         If annotations from several annotators are available for a given document, the recall 
-        corresponds to a micro-average over the annotators. """
+        corresponds to a micro-average over the annotators."""
         
         nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
                                                                   include_quasi, token_level)
@@ -699,14 +770,13 @@ class Evaluator:
         return {ent_type:nb_masked_by_type[ent_type]/nb_by_type[ent_type]
                 for ent_type in nb_by_type}
                 
-    def _get_mask_counts(self, masked_docs:List[MaskedDocument], include_direct=True, 
-                                   include_quasi=True, token_level:bool=True):
+    def _get_mask_counts(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
+                                   include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> Tuple[dict, dict]:
         
         nb_masked_elements_by_type = {}
         nb_elements_by_type = {}
         
-        for doc in masked_docs:
-            
+        for doc in masked_docs:            
             gold_doc = self.documents[doc.doc_id]           
             for entity in gold_doc.get_entities_to_mask(include_direct, include_quasi):
                 
@@ -731,31 +801,32 @@ class Evaluator:
 
     #region TPS and TPI
 
-    def get_TPS(self, masked_docs:List[MaskedDocument], token_weighting: TokenWeighting,
-                word_alterning=6, sim_model_name="paraphrase-albert-base-v2", use_chunking=True) -> Tuple[float, np.ndarray, np.ndarray]:
+    def get_TPS(self, masked_docs:List[MaskedDocument], token_weighting:TokenWeighting,
+                term_alterning=TPS_TERM_ALTERNING, similarity_model_name:str=TPS_SIMILARITY_MODEL_NAME,
+                use_chunking:bool=TPS_USE_CHUNKING) -> Tuple[float, np.ndarray, np.ndarray]:
         tps_array = np.empty(len(masked_docs))
         similarity_array = []
         
         # Load embedding model and function for similarity
-        embedding_func = self._get_embedding_func(sim_model_name)
+        embedding_func = self._get_embedding_func(similarity_model_name)
         
         # Process each masked document
         for i, masked_doc in enumerate(tqdm(masked_docs)):
-            gold_doc = self.documents[masked_doc.doc_id]
+            doc = self.documents[masked_doc.doc_id]
 
             # Get text spans
-            spans = self._get_terms_spans(gold_doc.spacy_doc, use_chunking=use_chunking)
+            spans = self._get_terms_spans(doc.spacy_doc, use_chunking=use_chunking)
 
             # Get IC for all spans
-            spans_IC = self._get_ICs(spans, gold_doc, token_weighting, word_alterning)
+            spans_IC = self._get_ICs(spans, doc, token_weighting, term_alterning)
 
             # Get replacements, corresponding masked texts and corresponding spans indexes
-            repl_out = self._get_replacements_info(masked_doc, gold_doc, spans)
+            repl_out = self._get_replacements_info(masked_doc, doc, spans)
             (replacements, masked_texts, spans_idxs_per_replacement) = repl_out
 
             # Measure similarities of replacements
-            masked_spans = self._filter_masked_spans(gold_doc, masked_doc)
-            spans_mask = self._get_spans_mask(spans, gold_doc, masked_spans) # Non-masked=True(1), Masked=False(0)
+            masked_spans = self._filter_masked_spans(doc, masked_doc)
+            spans_mask = self._get_spans_mask(spans, masked_spans) # Non-masked=True(1), Masked=False(0)
             spans_sims = np.array(spans_mask, dtype=float) # Similarities for terms: Non-masked=1, Supressed=0, Replaced=[0,1]
             if len(replacements) > 0:
                 texts_to_embed = masked_texts + replacements
@@ -785,21 +856,21 @@ class Evaluator:
 
         return tps, tps_array, similarity_array 
 
-    def get_TPI(self, masked_docs: List[MaskedDocument], token_weighting: TokenWeighting,
-            word_alterning=6, use_chunking: bool=True) -> Tuple[float, np.ndarray, np.ndarray]:
+    def get_TPI(self, masked_docs:List[MaskedDocument], token_weighting:TokenWeighting,
+            term_alterning=TPI_TERM_ALTERNING, use_chunking:bool=TPI_USE_CHUNKING) -> Tuple[float, np.ndarray, np.ndarray]:
         tpi_array = np.empty(len(masked_docs))
         IC_multiplier_array = np.empty(len(masked_docs))
 
         for i, masked_doc in enumerate(tqdm(masked_docs)):
-            gold_doc = self.documents[masked_doc.doc_id]
+            doc = self.documents[masked_doc.doc_id]
 
             # Get terms spans and mask
-            spans = self._get_terms_spans(gold_doc.spacy_doc, use_chunking=use_chunking)
-            masked_spans = self._filter_masked_spans(gold_doc, masked_doc)
-            spans_mask = self._get_spans_mask(spans, gold_doc, masked_spans) # Non-masked=True(1), Masked=False(0)
+            spans = self._get_terms_spans(doc.spacy_doc, use_chunking=use_chunking)
+            masked_spans = self._filter_masked_spans(doc, masked_doc)
+            spans_mask = self._get_spans_mask(spans, masked_spans) # Non-masked=True(1), Masked=False(0)
 
             # Get IC for all spans
-            spans_IC = self._get_ICs(spans, gold_doc, token_weighting, word_alterning)
+            spans_IC = self._get_ICs(spans, doc, token_weighting, term_alterning)
             
             # Get TIC of the original and masked documents
             original_TIC = spans_IC.sum()
@@ -822,7 +893,7 @@ class Evaluator:
 
         return tpi, tpi_array, IC_multiplier_array
 
-    def _get_terms_spans(self, spacy_doc: spacy.tokens.Doc, use_chunking: bool=True) -> list:
+    def _get_terms_spans(self, spacy_doc:spacy.tokens.Doc, use_chunking:bool=True) -> List[Tuple[int, int]]:
         text_spans = []
         added_tokens = np.zeros(len(spacy_doc), dtype=bool)
 
@@ -858,10 +929,10 @@ class Evaluator:
 
         return text_spans
 
-    def _filter_masked_spans(self, gold_doc, masked_doc: MaskedDocument) -> list:
+    def _filter_masked_spans(self, doc:Document, masked_doc:MaskedDocument) -> List[Tuple[int, int]]:
         filtered_masked_spans = []
 
-        masking_array = np.zeros(len(gold_doc.spacy_doc.text), dtype=bool)
+        masking_array = np.zeros(len(doc.spacy_doc.text), dtype=bool)
         for (s, e) in masked_doc.masked_spans:
             masking_array[s:e] = True
         
@@ -877,7 +948,7 @@ class Evaluator:
         
         return filtered_masked_spans
 
-    def _get_spans_mask(self, spans: List[Tuple[int, int]], gold_doc, masked_spans: list) -> np.array:
+    def _get_spans_mask(self, spans:List[Tuple[int, int]], masked_spans:List[Tuple[int, int]]) -> np.ndarray:
         spans_mask = np.empty(len(spans), dtype=bool)
         sorted_masked_spans = sorted(masked_spans, key=lambda span: span[0], reverse=False)
 
@@ -892,18 +963,18 @@ class Evaluator:
 
         return spans_mask
 
-    def _get_ICs(self, spans: List[Tuple[int, int]], gold_doc, token_weighting: TokenWeighting, word_alterning) -> np.array:
+    def _get_ICs(self, spans:List[Tuple[int, int]], doc:Document, token_weighting:TokenWeighting, term_alterning:int) -> np.ndarray:
         spans_IC = np.empty(len(spans))
-        if isinstance(word_alterning, int) and word_alterning > 1: # N Word Alterning
+        if isinstance(term_alterning, int) and term_alterning > 1: # N Word Alterning
             # Get ICs by masking each N words, with all the document as context
-            for i in range(word_alterning):
-                spans_for_IC = spans[i::word_alterning]
-                spans_IC[i::word_alterning] = self._get_spans_ICs(spans_for_IC, gold_doc, token_weighting)
+            for i in range(term_alterning):
+                spans_for_IC = spans[i::term_alterning]
+                spans_IC[i::term_alterning] = self._get_spans_ICs(spans_for_IC, doc, token_weighting)
         
-        elif isinstance(word_alterning, str) and word_alterning == "sentence": # Sentence Word Alterning
+        elif isinstance(term_alterning, str) and term_alterning == "sentence": # Sentence Word Alterning
             # Get masks by masking 1 word of each sentence, with the sentence as context
             # Get sentences spans
-            sentences_spans = [[sent.start_char, sent.end_char] for sent in gold_doc.spacy_doc.sents]
+            sentences_spans = [[sent.start_char, sent.end_char] for sent in doc.spacy_doc.sents]
             # Iterate sentences
             ini_span_idx = 0
             for sentence_span in sentences_spans:
@@ -929,24 +1000,24 @@ class Evaluator:
                 ini_span_idx = span_idx
                 # Get IC for each span of the sentence
                 for span in spans_for_IC:
-                    original_info, masked_info, n_masked_terms = self._get_spans_ICs(gold_doc, [span], gold_doc,
+                    original_info, masked_info, n_masked_terms = self._get_spans_ICs(doc, [span], doc,
                                                                                      token_weighting, context_span=sentence_span)
                     original_doc_info += original_info
                     masked_doc_info += masked_info
                     total_n_masked_terms += n_masked_terms
         else:
-            raise Exception(f"Word alterning setting [{word_alterning}] is invalid")
+            raise RuntimeError(f"Word alterning setting {term_alterning} is invalid")
 
         return spans_IC
     
-    def _get_spans_ICs(self, spans: List[Tuple[int, int]], gold_doc, token_weighting: TokenWeighting, context_span=None) -> np.array:
+    def _get_spans_ICs(self, spans: List[Tuple[int, int]], doc:Document, token_weighting: TokenWeighting, context_span=None) -> np.ndarray:
         # By default, context span is all the document
         if context_span is None:
-            context_span = (0, len(gold_doc.text))
+            context_span = (0, len(doc.text))
 
         # Get context
         context_start, context_end = context_span
-        context = gold_doc.text[context_start:context_end]
+        context = doc.text[context_start:context_end]
 
         # Adjust spans to the context
         in_context_spans = []
@@ -955,7 +1026,6 @@ class Evaluator:
 
         # Obtain the weights (Information Content) of each word
         ICs = token_weighting.get_weights(context, in_context_spans)
-        ICs = np.array(ICs) # Transform to numpy
 
         return ICs
     
@@ -968,7 +1038,7 @@ class Evaluator:
         
         return embedding_func
     
-    def _get_replacements_info(self, masked_doc: MaskedDocument, gold_doc, spans: list):
+    def _get_replacements_info(self, masked_doc:MaskedDocument, doc:Document, spans:List[Tuple[int, int]]) -> List[list, list, list]:
         replacements = []
         masked_texts = []
         spans_idxs_per_replacement = []
@@ -976,7 +1046,7 @@ class Evaluator:
         for replacement, (masked_span_start, masked_span_end) in zip(masked_doc.replacements, masked_doc.masked_spans):
             if replacement is not None: # If there is a replacement
                 replacements.append(replacement)
-                masked_texts.append(gold_doc.text[masked_span_start:masked_span_end])
+                masked_texts.append(doc.text[masked_span_start:masked_span_end])
                 replacement_spans_idxs = []
                 for span_idx, (span_start, span_end) in enumerate(spans):
                     if span_start <= masked_span_start < span_end or span_start < masked_span_end <= span_end:
@@ -987,7 +1057,7 @@ class Evaluator:
         
         return replacements, masked_texts, spans_idxs_per_replacement
     
-    def _cos_sim(self, a:np.array, b:np.array) -> float:
+    def _cos_sim(self, a:np.ndarray, b:np.ndarray) -> float:
         dot_product = np.dot(a, b)
         magnitude_a = np.linalg.norm(a)
         magnitude_b = np.linalg.norm(b)
@@ -999,52 +1069,99 @@ class Evaluator:
     #endregion
 
 
-    #region DocumentClustering
+    #region NMI
 
-    def get_NMI(self, masked_docs:List[MaskedDocument]):
+    def get_NMI(self, anonymizations:Dict[str, List[MaskedDocument]], k:int, 
+                clustering_embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
+                clustering_embedding_size:int=NMI_EMBEDDING_SIZE,
+                remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=NMI_MASK_MARKS,
+                max_pooling:bool=NMI_MAX_POOLING,
+                n_clusterings:int=NMI_N_CLUSTERINGS, n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> np.ndarray:
+        
+        # Create the corpora
+        corpora = self._get_corpora_for_NMI(anonymizations)
+
         # Get the embeddings
-        all_embeddings = self._get_all_embeddings(all_documents)
+        corpora_embeddings = self._get_corpora_embeddings(corpora, clustering_embedding_model_name, clustering_embedding_size,
+                                                   remove_mask_marks=remove_mask_marks, mask_marks=mask_marks,
+                                                   max_pooling=max_pooling)
 
         # Clustering
-        k=4
-        NMI_metrics, all_labels = self._multi_clustering_eval(all_embeddings, k=k)
-
-        # Print results
-        for elem in zip(docs_columns, NMI_metrics):
-            print(elem)
+        results, all_labels = self._multi_clustering_eval(corpora_embeddings, k, n_clusterings=n_clusterings,
+                                                              n_tries_per_clustering=n_tries_per_clustering)
         
-        return NMI_metrics
+        # Remove result for the first corpus (ground truth defined by the original texts)
+        results = results[1:]
+        
+        return results
+
+    def _get_corpora_for_NMI(self, anonymizations:Dict[str, List[MaskedDocument]]) -> List[List[str]]:
+        # The first corpus contains the original documents, sorted by doc_id
+        original_corpus_with_ids = sorted(
+            [(doc.doc_id, doc.text) for doc in self.documents],
+            key=lambda x: x[0]
+        )
+        corpora_with_ids = [original_corpus_with_ids]
+
+        # Iterate through each anonymization method to create masked corpora
+        for masked_docs_list in anonymizations.values():
+            # For each anonymization, generate the masked texts and pair with doc_ids
+            masked_corpus_with_ids = sorted(
+                [
+                    (masked_doc.doc_id, masked_doc.get_masked_text(self.documents[masked_doc.doc_id].text))
+                    for masked_doc in masked_docs_list
+                ],
+                key=lambda x: x[0]
+            )
+            corpora_with_ids.append(masked_corpus_with_ids)
+
+        # Extract only the text from each corpus, maintaining the sorted order by doc_id
+        corpora = [[text for _, text in corpus_with_ids] for corpus_with_ids in corpora_with_ids]
+
+        return corpora
 
     #region Embedding/feature extraction
 
-    def _get_all_embeddings(self, all_documents, remove_mask_marks=False)->list:
+    def _get_corpora_embeddings(self, corpora:List[List[str]], clustering_embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
+                                 clustering_embedding_size:int=NMI_EMBEDDING_SIZE,
+                                 remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=NMI_MASK_MARKS,
+                                 max_pooling:bool=NMI_MAX_POOLING, device:str=DEVICE) -> List[np.ndarray]:
+        corpora_embeddings = []
+
         # Create BERT-based model and tokenizer
-        model = AutoModel.from_pretrained(self.clustering_embedding_model_name, output_hidden_states=True) # Whether the model returns all hidden-states.
-        model.to(DEVICE)
+        model = AutoModel.from_pretrained(clustering_embedding_model_name, output_hidden_states=True) # The model returns all hidden-states.
+        model.to(device)
         model.eval()
-        tokenizer = AutoTokenizer.from_pretrained(self.clustering_embedding_model_name)
+        tokenizer = AutoTokenizer.from_pretrained(clustering_embedding_model_name)
 
         # Collect embeddings
-        all_embeddings = []
-        for corpus in tqdm(all_documents):
+        mask_marks_re_pattern = "|".join([m.upper() for m in mask_marks])
+        for corpus in tqdm(corpora):
             # Remove mask marks
-            if remove_mask_marks:
-                pattern = "|".join([m.upper() for m in MASK_MARKS])
-                for i, text in enumerate(corpus):
-                    corpus[i] = re.sub(pattern, "", text)
+            if remove_mask_marks:                
+                for idx, text in enumerate(corpus):
+                    corpus[idx] = re.sub(mask_marks_re_pattern, "", text)
+                    #TODO: Strip?
 
-            corpus_embeddings = np.empty((len(corpus), 768))  # 768 = BERT embedding size
+            corpus_embeddings = np.empty((len(corpus), clustering_embedding_size))
             with tqdm(total=len(corpus)) as pbar:
-                for i, text in enumerate(corpus):
-                    corpus_embeddings[i] = self._bert_embedding(text, model, tokenizer)
+                for idx, text in enumerate(corpus):
+                    corpus_embeddings[idx] = self._get_text_embedding(text, model, tokenizer, max_pooling=max_pooling)
                     pbar.update(1)
 
-            all_embeddings.append(corpus_embeddings)
+            corpora_embeddings.append(corpus_embeddings)
+        
+        # Remove model and tokenizer
+        del model
+        del tokenizer
+        gc.collect() # Collect garbage
+        if torch.cuda.is_available(): # Empty CUDA cache
+            torch.cuda.empty_cache()
 
-        return all_embeddings
+        return corpora_embeddings
 
-    def _bert_embedding(self, texts, model, tokenizer, max_pooling=False):
-        tokens = tokenizer.encode(texts, truncation=False, padding='max_length', add_special_tokens=True, return_tensors="pt")
+    def _get_text_embedding(self, text:str, model, tokenizer, max_pooling:bool=NMI_MAX_POOLING):
+        tokens = tokenizer.encode(text, truncation=False, padding='max_length', add_special_tokens=True, return_tensors="pt")
         tokens = tokens.to(DEVICE)
         overlap_span = None
 
@@ -1088,44 +1205,45 @@ class Evaluator:
 
     #region Clustering
 
-    def _multi_clustering_eval(self, all_embeddings, k=None, n_clusterings=5, tries_per_clustering=50):
-        results = np.empty((n_clusterings, len(all_embeddings)))
+    def _multi_clustering_eval(self, corpora_embeddings:List[np.ndarray], k:int, n_clusterings:int=NMI_N_CLUSTERINGS,
+                                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, np.ndarray]:
+        results = np.empty((n_clusterings, len(corpora_embeddings)))
         for i in range(n_clusterings):
-            true_labels, all_labels = self._get_all_clusterings(all_embeddings, k=k, tries=tries_per_clustering)
-            results[i, :] = self._compare_clusterings(true_labels, all_labels, normalized_mutual_info_score)
+            true_labels, corpora_labels = self._get_all_clusterings(corpora_embeddings, k, tries_per_clustering=n_tries_per_clustering)
+            results[i, :] = self._compare_clusterings(true_labels, corpora_labels, normalized_mutual_info_score)
 
-        # Average per n_clusterings
+        # Average for the n_clusterings
         results = results.mean(axis=0)
 
-        return results, all_labels
+        return results, corpora_labels
 
-    def _get_all_clusterings(self, all_embeddings, k=None, tries=50):
-        all_labels = []
+    def _get_all_clusterings(self, corpora_embeddings:List[np.ndarray], k:int, tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, List[np.ndarray]]:
+        corpora_labels = []
 
-        true_labels, inertia = self._clusterize(all_embeddings[0], k, tries=tries) # First used as groundtruth
+        # First corpus corresponds to the ground truth
+        true_labels, inertia = self._clusterize(corpora_embeddings[0], k, tries=tries_per_clustering)
+        #TODO: Report inertia for defining proper k
 
-        for embeddings in tqdm(all_embeddings):
-            labels, inertia = self._clusterize(embeddings, k, tries=tries) # Repeating for the first allows to check the consistency of the groundtruth
-            all_labels.append(labels)
+        # Clusterize for each corpus
+        for corpus_embeddings in tqdm(corpora_embeddings): # Repeating for the first one (ground truth) allows to check consistency
+            labels, inertia = self._clusterize(corpus_embeddings, k, tries=tries_per_clustering) 
+            corpora_labels.append(labels)
 
-        return true_labels, all_labels
+        return true_labels, corpora_labels
 
-    def _clusterize(self, embeddings, k, tries=50):
+    def _clusterize(self, corpus_embeddings, k:int, tries:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, float]:
         inertia = 0
-        kmeans = KMeans(n_clusters=k, init='k-means++', n_init=tries)
-        labels = kmeans.fit_predict(embeddings)  # WikiActors and Wiki553
-        inertia = kmeans.inertia_
-        # Wiki553 bad manual | labels = DBSCAN(eps=1.1, min_samples=5, algorithm='kd_tree', metric='euclidean').fit(embeddings).labels_
-        #labels = DBSCAN(eps=1.5, min_samples=5, algorithm='kd_tree', metric='euclidean').fit(embeddings).labels_ # Wiki533?
-        #labels = OPTICS(min_samples=0.1, max_eps=1.25).fit(embeddings).labels_
+        kmeanspp = KMeans(n_clusters=k, init='k-means++', n_init=tries)
+        labels = kmeanspp.fit_predict(corpus_embeddings)
+        inertia = kmeanspp.inertia_
         return labels, inertia
 
-    def _compare_clusterings(self, true_labels, all_labels, eval_metric):
-        metrics = []
-        for labels in all_labels:
-            metric = eval_metric(labels, true_labels)
-            metrics.append(metric)
-        return np.array(metrics)
+    def _compare_clusterings(self, true_labels:np.ndarray, corpora_labels:List[np.ndarray], eval_metric) -> np.ndarray:
+        metrics = np.empty(len(corpora_labels))
+        for idx, corpus_labels in enumerate(corpora_labels):
+            metric = eval_metric(corpus_labels, true_labels)
+            metrics[idx] = metric
+        return metrics
 
     #endregion
 
@@ -1150,7 +1268,7 @@ class Evaluator:
 if __name__ == "__main__":
 
 
-    #region Arguments
+    #region Arguments parsing
 
     parser = argparse.ArgumentParser(description='Computes evaluation metrics for text anonymization')
     parser.add_argument('config_filepath', type=str,
@@ -1170,20 +1288,20 @@ if __name__ == "__main__":
 
     #region Initialization
 
-    # Create evaluator from corpus
+    # Create TAE from corpus
     corpus_filepath = config[CORPUS_CONFIG_KEY]
     with open(corpus_filepath, encoding="utf-8") as f:
         corpus = json.load(f)
     if type(corpus)!=list:
         raise RuntimeError("Corpus JSON file must be a list of documents")
     logging.info(f"Corpus with {len(corpus)} documents")
-    evaluator = Evaluator(corpus)
+    tae = TAE(corpus)
 
-    # Create masked documents from anonymizations
+    # Create anonymizations
     anonymizations = {}
     anonymizations_config = config[ANONYMIZATIONS_CONFIG_KEY]
     for anon_name, anon_filepath in anonymizations_config.items():
-        masked_docs = MaskedDocumentList(anon_filepath)
+        masked_docs = MaskedCorpus(anon_filepath)
         anonymizations[anon_name] = masked_docs
     
     # Get metrics
@@ -1195,9 +1313,9 @@ if __name__ == "__main__":
     #endregion
 
 
-    #region Evaluation
+    #region Evaluate
 
-    evaluator.evaluate(anonymizations, metrics, results_filepath)
+    tae.evaluate(anonymizations, metrics, results_filepath)
 
     #endregion
 

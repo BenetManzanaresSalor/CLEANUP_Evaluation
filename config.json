@@ -4,10 +4,12 @@
     "results_filepath": "results.csv",
     "metrics":{
         "precision":{
-            "token_level": false,
-            "weighting": "uniform"
+            "weighting": "Uniform"
         },
-        "TRIR":{
+        "precision_IC":{
+            "weighting": "IC"
+        },
+        "Ignore_TRIR":{
             "output_folder_path": "outputs/WikiActors/50_eval",
             "data_file_path": "data/WikiActors_50_eval.json",
             "individual_name_column": "name",
