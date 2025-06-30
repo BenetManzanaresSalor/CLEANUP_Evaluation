@@ -1,6 +1,8 @@
 #region Imports
 
+
 import json, re, abc, argparse, math, ntpath, os, csv, gc #TODO: Check why ntpath unused
+os.environ["OMP_NUM_THREADS"] = "1" # To avoid (before loading MKL): \sklearn\cluster\_kmeans.py:1382: UserWarning: KMeans is known to have a memory leak on Windows with MKL, when there are less chunks than available threads. You can avoid it by setting the environment variable OMP_NUM_THREADS=1
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 from dataclasses import dataclass
@@ -104,6 +106,7 @@ TPS_SIMILARITY_MODEL_NAME = "paraphrase-albert-base-v2" # From the Sentence-Tran
 # Default settings for NMI
 NMI_EMBEDDING_MODEL_NAME = "bert-base-cased" # Other options: "distilbert-base-uncased", "distilbert-base-cased", "bert-base-uncased", "roberta-base"
 NMI_EMBEDDING_SIZE = 768 # BERT embedding size
+NMI_K = 4 #TODO: This should not be defaulted
 NMI_REMOVE_MASK_MARKS = False
 NMI_MASK_MARKS = ["sensitive", "person", "dem", "loc",
                         "org", "datetime", "quantity", "misc",
@@ -114,8 +117,6 @@ NMI_MASK_MARKS = ["sensitive", "person", "dem", "loc",
 NMI_MAX_POOLING = False
 NMI_N_CLUSTERINGS = 5
 NMI_N_TRIES_PER_CLUSTERING = 50
-os.environ["OMP_NUM_THREADS"] = "3" # To avoid: \sklearn\cluster\_kmeans.py:1382: UserWarning: KMeans is known to have a memory leak on Windows with MKL, when there are less chunks than available threads. You can avoid it by setting the environment variable OMP_NUM_THREADS=3
-
 
 #TODO: Default settings for TPI
 
@@ -269,7 +270,7 @@ class Document:
                 raise RuntimeError(f"Invalid character offsets: [{start}-{end}]")
                 
             if mention["identifier_type"] not in ["DIRECT", "QUASI", "NO_MASK"]:
-                raise RuntimeError(f"Unspecified or invalid identifier type: {mention["identifier_type"]}")
+                raise RuntimeError(f"Unspecified or invalid identifier type: {mention['identifier_type']}")
 
             need_masking = mention["identifier_type"] in ["DIRECT", "QUASI"]
             is_direct = mention["identifier_type"]=="DIRECT"
@@ -561,19 +562,19 @@ class TAE:
     """Text Anonymization Evaluator (TAE), defined by the corpus for text anonymization.
     Optionally, the corpus can include gold annotations, used for precision and recall metrics."""
 
-    documents:Dict[Document]
+    documents:Dict[str, Document]
     nlp=None
 
     #region Initialization
     
-    def __init__(self, corpus:list, spacy_model_name:str=SPACY_MODEL_NAME):
+    def __init__(self, corpus:List[Document], spacy_model_name:str=SPACY_MODEL_NAME):
         # Documents indexed by identifier
         self.documents = {}
 
         # Loading the spaCy model
         self.nlp = spacy.load(spacy_model_name, disable=["lemmatizer"])        
 
-        for doc in tqdm(corpus):
+        for doc in tqdm(corpus, desc=f"Loading corpus of {len(corpus)} documents"):
             for key in [DOC_ID_KEY, TEXT_KEY, GOLD_ANNOTATIONS_KEY]: #TODO: Annotations only needed for precision and recall
                 if key not in doc:
                     raise RuntimeError(f"Document {doc.doc_id} missing key {key}") #TODO: Rewrite all RuntimeErrors
@@ -608,8 +609,7 @@ class TAE:
 
             # For NMI, evaluate all anonymizations at once
             if metric_key == NMI_METRIC_NAME:
-                output = self.get_NMI(anonymizations)
-                values = output[0] # First output component corresponds to vector of NMI values 
+                values = self.get_NMI(anonymizations)
                 metric_results = {anon_name:value for anon_name, value in zip(anonymizations.keys(), values)}
 
             # Otherwise, iterate through each anonymization
@@ -630,7 +630,7 @@ class TAE:
             if verbose:
                 pass #TODO: Print results in a fancy way
             if results_filepath:
-                self._write_into_results([metric_name]+list(metric_results.values()))
+                self._write_into_results(results_filepath, [metric_name]+list(metric_results.values()))
         
         return results
 
@@ -638,7 +638,7 @@ class TAE:
         partial_func = None
 
         if not metric_name in METRIC_NAMES:
-            logging.warning(f"Unknown metric name {metric_name} | Available metrics: {METRIC_NAMES}")
+            logging.warning(f"Unknown metric {metric_name} | Available metrics: {METRIC_NAMES}")
         
         if metric_name == PRECISION_METRIC_NAME:
             partial_func = partial(self.get_precision, **parameters)
@@ -664,7 +664,7 @@ class TAE:
             os.makedirs(directory, exist_ok=True) # Create directory (including intermediate ones)
 
         # Store the row of results
-        with open(results_filepath, 'a+') as csvfile:
+        with open(results_filepath, 'a+', newline='') as csvfile:
             writer = csv.writer(csvfile)
             datetime_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")        
             writer.writerow([datetime_str]+row)
@@ -705,7 +705,7 @@ class TAE:
             weights = token_weighting.get_weights(gold_doc.text, system_masks)
             
             # We store the number of annotators in the gold standard document
-            nb_annotators = len(set(entity.annotator for entity in gold_doc.entities.values()))
+            nb_annotators = len(set(entity.annotator for entity in gold_doc.annotated_entities.values()))
             
             for (start, end), weight in zip(system_masks, weights):
                 
@@ -1038,7 +1038,7 @@ class TAE:
         
         return embedding_func
     
-    def _get_replacements_info(self, masked_doc:MaskedDocument, doc:Document, spans:List[Tuple[int, int]]) -> List[list, list, list]:
+    def _get_replacements_info(self, masked_doc:MaskedDocument, doc:Document, spans:List[Tuple[int, int]]) -> Tuple[list, list, list]:
         replacements = []
         masked_texts = []
         spans_idxs_per_replacement = []
@@ -1071,7 +1071,7 @@ class TAE:
 
     #region NMI
 
-    def get_NMI(self, anonymizations:Dict[str, List[MaskedDocument]], k:int, 
+    def get_NMI(self, anonymizations:Dict[str, List[MaskedDocument]], k:int=NMI_K, 
                 clustering_embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
                 clustering_embedding_size:int=NMI_EMBEDDING_SIZE,
                 remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=NMI_MASK_MARKS,
@@ -1098,7 +1098,7 @@ class TAE:
     def _get_corpora_for_NMI(self, anonymizations:Dict[str, List[MaskedDocument]]) -> List[List[str]]:
         # The first corpus contains the original documents, sorted by doc_id
         original_corpus_with_ids = sorted(
-            [(doc.doc_id, doc.text) for doc in self.documents],
+            [(doc.doc_id, doc.text) for doc in self.documents.values()],
             key=lambda x: x[0]
         )
         corpora_with_ids = [original_corpus_with_ids]
@@ -1128,7 +1128,7 @@ class TAE:
                                  max_pooling:bool=NMI_MAX_POOLING, device:str=DEVICE) -> List[np.ndarray]:
         corpora_embeddings = []
 
-        # Create BERT-based model and tokenizer
+        # Create BERT-based model and tokenizer #TODO: Use SentenceTransformers?
         model = AutoModel.from_pretrained(clustering_embedding_model_name, output_hidden_states=True) # The model returns all hidden-states.
         model.to(device)
         model.eval()
@@ -1294,7 +1294,6 @@ if __name__ == "__main__":
         corpus = json.load(f)
     if type(corpus)!=list:
         raise RuntimeError("Corpus JSON file must be a list of documents")
-    logging.info(f"Corpus with {len(corpus)} documents")
     tae = TAE(corpus)
 
     # Create anonymizations

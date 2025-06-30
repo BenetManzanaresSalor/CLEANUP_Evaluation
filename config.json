@@ -1,13 +1,20 @@
 {
     "corpus_filepath": "data/TAB_test_Gold.json",
-    "anonymizations": {"Presidio":"data/TAB_test_Presidio.json", "INTACT":"data/TAB_test_INTACT.json"},
+    "anonymizations": {
+        "MvM":"data/TAB_test_gpt-3.5-turbo-0125_mvm-st.json",
+        "Manual_Entity":"data/TAB_test_Entity.json"
+    },
     "results_filepath": "results.csv",
     "metrics":{
-        "precision":{
-            "weighting": "Uniform"
+        "Precision":{
+            "token_weighting": "Uniform"
         },
-        "precision_IC":{
-            "weighting": "IC"
+        "Ignore_Precision_IC":{
+            "token_weighting": "IC"
+        },
+        "Recall":{},
+        "NMI":{
+            "k":4
         },
         "Ignore_TRIR":{
             "output_folder_path": "outputs/WikiActors/50_eval",
