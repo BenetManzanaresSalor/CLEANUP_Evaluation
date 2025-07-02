@@ -6,14 +6,19 @@
     },
     "results_filepath": "results.csv",
     "metrics":{
-        "Precision":{
+        "Ignore_Precision":{
             "token_weighting": "Uniform"
         },
         "Ignore_Precision_IC":{
             "token_weighting": "IC"
         },
-        "Recall":{},
-        "NMI":{
+        "RecallPerEntity":{},
+        "Ignore_TPI": {},
+        "Ignore_TPS": {},
+        "NMI_k=2":{
+            "k":2
+        },
+        "NMI_k=4":{
             "k":4
         },
         "Ignore_TRIR":{
