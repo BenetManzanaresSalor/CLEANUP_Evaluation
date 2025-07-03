@@ -43,7 +43,7 @@ import en_core_web_lg # This model is leveraged for every spaCy usage (https://s
 #region Input settings
 
 # Configuration dictionary keys
-CORPUS_CONFIG_KEY = "corpus_file_path"
+CORPUS_CONFIG_KEY = "corpus_file_path" #TODO: Perhaps also accept a HuggingFace's dataset
 ANONYMIZATIONS_CONFIG_KEY = "anonymizations"
 RESULTS_CONFIG_KEY = "results_file_path"
 METRICS_CONFIG_KEY = "metrics"
@@ -84,12 +84,13 @@ METRICS_REQUIRING_GOLD_ANNOTATIONS = [PRECISION_METRIC_NAME, RECALL_METRIC_NAME,
 #region General settings
 
 SPACY_MODEL_NAME = "en_core_web_md"
-IC_WEIGHTING_MODEL_NAME = "google-bert/bert-base-uncased"
+IC_WEIGHTING_MODEL_NAME = "google-bert/bert-base-uncased" #TODO: Define it as parameter
 TOKEN_WEIGHTING_KEY = "token_weighting"
 IC_WEIGHTING_NAME = "IC"
 IC_WEIGHTING_MAX_SEGMENT_LENGTH = 100
 UNIFORM_WEIGHTING_NAME = "Uniform"
 TOKEN_WEIGHTING_NAMES = [IC_WEIGHTING_NAME, UNIFORM_WEIGHTING_NAME]
+BACKGROUND_KNOWLEDGE_KEY = "background_knowledge" # For TRIR background knowledge file
 
 # POS tags, tokens or characters that can be ignored from the recall scores 
 # (because they do not carry much semantic content, and there are discrepancies
@@ -97,6 +98,13 @@ TOKEN_WEIGHTING_NAMES = [IC_WEIGHTING_NAME, UNIFORM_WEIGHTING_NAME]
 POS_TO_IGNORE = {"ADP", "PART", "CCONJ", "DET"} 
 TOKENS_TO_IGNORE = {"mr", "mrs", "ms", "no", "nr", "about"}
 CHARACTERS_TO_IGNORE = " ,.-;:/&()[]–'\" ’“”"
+
+MASKING_MARKS = ["SENSITIVE", "PERSON", "DEM", "LOC",
+                 "ORG", "DATETIME", "QUANTITY", "MISC",
+                 "NORP", "FAC", "GPE", "PRODUCT", "EVENT",
+                 "WORK_OF_ART", "LAW", "LANGUAGE", "DATE",
+                 "TIME", "ORDINAL", "CARDINAL", "DATE_TIME", "DATETIME",
+                 "NRP", "LOCATION", "ORGANIZATION", "\*\*\*"]
 
 # Check for GPU with CUDA
 if torch.cuda.is_available():
@@ -127,23 +135,17 @@ TPS_TERM_ALTERNING = 6
 TPS_USE_CHUNKING = True
 TPS_SIMILARITY_MODEL_NAME = "paraphrase-albert-base-v2" # From the Sentence-Transformers library
 
-
 # Default settings for NMI
 NMI_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2" # Options: "all-MiniLM-L6-v2", "all-mpnet-base-v2" others from https://www.sbert.net/docs/sentence_transformer/pretrained_models.html or classic models such as "bert-base-cased" 
 NMI_MIN_K = 2
 NMI_MAX_K = 32
 NMI_K_MULTIPLIER = 2
 NMI_REMOVE_MASK_MARKS = False
-NMI_MASKING_MARKS = ["SENSITIVE", "PERSON", "DEM", "LOC",
-                 "ORG", "DATETIME", "QUANTITY", "MISC",
-                 "NORP", "FAC", "GPE", "PRODUCT", "EVENT",
-                 "WORK_OF_ART", "LAW", "LANGUAGE", "DATE",
-                 "TIME", "ORDINAL", "CARDINAL", "DATE_TIME", "DATETIME",
-                 "NRP", "LOCATION", "ORGANIZATION", "\*\*\*"]
 NMI_N_CLUSTERINGS = 5
 NMI_N_TRIES_PER_CLUSTERING = 50
 
 #TODO: Default settings for TRIR
+
 
 #endregion
 
@@ -176,8 +178,8 @@ class MaskedDocument:
         masked_text = ""+original_text
         
         for (start_idx, end_idx), replacement in zip(reversed(self.masked_spans), reversed(self.replacements)):
-            if replacement is None: # If there is no replacement, use empty string
-                replacement = ""
+            if replacement is None: # If there is no replacement, use first masking mark
+                replacement = MASKING_MARKS[0]
             masked_text = masked_text[:start_idx] + replacement + masked_text[end_idx:]
         
         return masked_text
@@ -637,7 +639,7 @@ class TAE:
         
         # Notify the number and percentage of annotated documents
         self.gold_annotations_ratio = n_docs_with_annotations / len(self.documents)
-        logging.info(f"Number of gold annotated documents: {n_docs_with_annotations} ({self.gold_annotations_ratio:.2%})")
+        logging.info(f"Number of gold annotated documents: {n_docs_with_annotations} ({self.gold_annotations_ratio:.3%})")
 
         # Create both token weighting types
         self.ic_weighting = ICTokenWeighting()
@@ -668,7 +670,7 @@ class TAE:
 
         # For each metric
         for metric_name, metric_parameters in metrics.items():
-            logging.info(f"############# Computing {metric_name} metric #############")
+            logging.info(f"########################### Computing {metric_name} metric ###########################")
             metric_key = metric_name.split("_")[0] # Text before first underscore is name of the metric, the rest is freely used
             partial_eval_func = self._get_partial_eval_func(metric_key, metric_parameters)
 
@@ -731,7 +733,7 @@ class TAE:
             if not metric_key in METRIC_NAMES:
                 logging.warning(f"Metric {metric_key} (from {name}) is unknown, therefore its results will be None | Options: {METRIC_NAMES}") #TODO: Maybe this can become an logging.error after testing
             elif name in METRICS_REQUIRING_GOLD_ANNOTATIONS and self.gold_annotations_ratio < 1:
-                raise RuntimeError(f"Metric {name} depends on gold annotations, but these are not present for all documents (only for a {self.gold_annotations_ratio:.2%})")
+                raise RuntimeError(f"Metric {name} depends on gold annotations, but these are not present for all documents (only for a {self.gold_annotations_ratio:.3%})")
             elif TOKEN_WEIGHTING_KEY in parameters and not parameters[TOKEN_WEIGHTING_KEY] in TOKEN_WEIGHTING_NAMES:
                 raise RuntimeError(f"Metric {name} has an invalid {TOKEN_WEIGHTING_KEY} ({parameters[TOKEN_WEIGHTING_KEY]}) | Options: {TOKEN_WEIGHTING_NAMES}")
 
@@ -1218,55 +1220,32 @@ class TAE:
 
     def get_NMI(self, anonymizations:Dict[str, List[MaskedDocument]], min_k:int=NMI_MIN_K, max_k:int=NMI_MAX_K,
                 k_multiplier:int=NMI_K_MULTIPLIER, clustering_embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
-                remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=NMI_MASKING_MARKS,
+                remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=MASKING_MARKS,
                 n_clusterings:int=NMI_N_CLUSTERINGS, n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> np.ndarray:
         
         # Create the corpora
-        corpora = self._get_corpora_for_NMI(anonymizations)
+        orig_corpora = self._get_anonymization_corpora(anonymizations)
+        nmi_corpora = [[doc_dict[TEXT_KEY] for doc_dict in orig_corpora]] # Prepend original texts (ground truth)
+        nmi_corpora += [[doc_dict[anon_name] for doc_dict in orig_corpora] for anon_name in anonymizations.keys()]
 
         # Get the embeddings
-        corpora_embeddings = self._get_corpora_embeddings(corpora, clustering_embedding_model_name,
+        corpora_embeddings = self._get_corpora_embeddings(nmi_corpora, clustering_embedding_model_name,
                                                    remove_mask_marks=remove_mask_marks, mask_marks=mask_marks)
         
         # Clustering results based on the maximum silhouette
-        values, all_labels, true_silhouettes = self._silhouette_based_NMI(corpora_embeddings, min_k=min_k, max_k=max_k, k_multiplier=k_multiplier,
+        values, all_labels, true_silhouettes, best_k = self._silhouette_based_NMI(corpora_embeddings, min_k=min_k, max_k=max_k, k_multiplier=k_multiplier,
                                                                       n_clusterings=n_clusterings, n_tries_per_clustering=n_tries_per_clustering)
         
         # Prepare results        
         values = values[1:] # Remove result for the first corpus (ground truth defined by the original texts)
         results = {anon_name:value for anon_name, value in zip(anonymizations.keys(), values)}
         
-        return results, all_labels, true_silhouettes
-
-    def _get_corpora_for_NMI(self, anonymizations:Dict[str, List[MaskedDocument]]) -> List[List[str]]:
-        # The first corpus contains the original documents, sorted by doc_id
-        original_corpus_with_ids = sorted(
-            [(doc.doc_id, doc.text) for doc in self.documents.values()],
-            key=lambda x: x[0]
-        )
-        corpora_with_ids = [original_corpus_with_ids]
-
-        # Iterate through each anonymization method to create a masked corpora
-        for masked_docs_list in anonymizations.values():
-            # For each anonymization, generate the masked texts and pair with doc_ids
-            masked_corpus_with_ids = sorted(
-                [
-                    (masked_doc.doc_id, masked_doc.get_masked_text(self.documents[masked_doc.doc_id].text))
-                    for masked_doc in masked_docs_list
-                ],
-                key=lambda x: x[0]
-            )
-            corpora_with_ids.append(masked_corpus_with_ids)
-
-        # Extract only the text from each corpus, maintaining the sorted order by doc_id
-        corpora = [[text for _, text in corpus_with_ids] for corpus_with_ids in corpora_with_ids]
-
-        return corpora
+        return results, all_labels, true_silhouettes, best_k
 
     #region Embedding/feature extraction
 
     def _get_corpora_embeddings(self, corpora:List[List[str]], clustering_embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
-                                 remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=NMI_MASKING_MARKS,
+                                 remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=MASKING_MARKS,
                                  device:str=DEVICE) -> List[np.ndarray]:
         corpora_embeddings = []
 
@@ -1314,10 +1293,10 @@ class TAE:
                 max_silhouette, best_k = avg_silhouettee, k
             k *= k_multiplier # By default, duplicate k
 
-        logging.info(f"Clustering results for k={best_k} were selected because they correspond to the maximum silhouette ({max_silhouette:.2f})")
+        logging.info(f"Clustering results for k={best_k} were selected because they correspond to the maximum silhouette ({max_silhouette:.3f})")
         values, all_labels, true_silhouettes = outputs_by_k[best_k]
 
-        return values, all_labels, true_silhouettes
+        return values, all_labels, true_silhouettes, best_k
 
     def _get_corpora_multiclustering(self, corpora_embeddings:List[np.ndarray], k:int, n_clusterings:int=NMI_N_CLUSTERINGS,
                                 n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, np.ndarray]:
@@ -1371,25 +1350,46 @@ class TAE:
 
     def get_TRIR(self, anonymizations:Dict[str, List[MaskedDocument]], 
                  output_folder_path:str, background_knowledge_file_path:str):
-        #TODO: Modify and use _get_corpora_for_NMI
-        # Transform corpora into dataframe
-        results = {None for name, masked_docs in anonymizations.items()}
+        corpora = self._get_anonymization_corpora(anonymizations)
+        dataframe = pd.DataFrame.from_dict(corpora)
 
-        tri = TRI(output_folder_path="To Be Defined",
-            data_file_path="To Be Defined",
+        tri = TRI(output_folder_path=output_folder_path,
+            dataframe=dataframe,
             individual_name_column=DOC_ID_KEY,
-            background_knowledge_column="public_knowledge",
-            anonymize_background_knowledge=False,
-            use_document_curation=False,
-            pretraining_epochs=1,
-            finetuning_epochs=1)
+            background_knowledge_column=TEXT_KEY,#TODO: =BACKGROUND_KNOWLEDGE_KEY,
+            anonymize_background_knowledge=False, #TODO: Pass parameters (after testing)
+            use_document_curation=False)
         
-        # TODO        
+        results = tri.run()
+        results = {anon_name:values["eval_Accuracy"] for anon_name, values in results.items()}
 
         return results
 
     #endregion
 
+
+    #endregion
+
+
+    #region Auxiliar
+    
+    def _get_anonymization_corpora(self, anonymizations:Dict[str, List[MaskedDocument]]) -> List[Dict[str,str]]:
+        corpora = []
+        
+        # Transform list of masked docs into dictionarys for faster processing
+        anon_dicts = {}
+        for anon_name, masked_docs in anonymizations.items():
+            anon_dicts[anon_name] = {masked_doc.doc_id:masked_doc for masked_doc in masked_docs}
+
+        # Create a dictionary per document
+        for doc_id, doc in self.documents.items():
+            doc_dict = {DOC_ID_KEY:doc_id, TEXT_KEY:doc.text}
+            for anon_name, masked_docs_dict in anon_dicts.items():
+                masked_doc = masked_docs_dict[doc_id]
+                doc_dict[anon_name] = masked_doc.get_masked_text(doc.text)
+            corpora.append(doc_dict)
+
+        return corpora
 
     #endregion
 
@@ -1405,10 +1405,10 @@ class TRI():
 
     #region ########## Mandatory configs ##########
 
-    mandatory_configs_names = ["output_folder_path", "data_file_path",
+    mandatory_configs_names = ["output_folder_path", "dataframe",
         "individual_name_column", "background_knowledge_column"]
     output_folder_path = None
-    data_file_path = None
+    dataframe = None #TODO: Document this has been changed
     individual_name_column = None
     background_knowledge_column = None
 
@@ -1424,7 +1424,7 @@ class TRI():
         "pretraining_learning_rate", "pretraining_mlm_probability", "pretraining_sliding_window",
         "save_finetuning", "load_saved_finetuning", "finetuning_epochs", "finetuning_batch_size",
         "finetuning_learning_rate", "finetuning_sliding_window", "dev_set_column_name"]
-    load_saved_pretreatment = True
+    load_saved_pretreatment = False #TODO: Note this has been changed
     add_non_saved_anonymizations = True
     anonymize_background_knowledge = True
     only_use_anonymized_background_knowledge = True
@@ -1434,14 +1434,14 @@ class TRI():
     tokenization_block_size = 250
     use_additional_pretraining = True
     save_additional_pretraining = True
-    load_saved_pretraining = True
+    load_saved_pretraining = False #TODO: Note this has been changed
     pretraining_epochs = 3
     pretraining_batch_size = 8
     pretraining_learning_rate = 5e-05
     pretraining_mlm_probability = 0.15
     pretraining_sliding_window = "512-128"
     save_finetuning = True
-    load_saved_finetuning = True
+    load_saved_finetuning = False #TODO: Note this has been changed
     finetuning_epochs = 15
     finetuning_batch_size = 16
     finetuning_learning_rate = 5e-05
@@ -1505,15 +1505,15 @@ class TRI():
         # Mandatory configs
         for setting_name in self.mandatory_configs_names:
             value = arguments.get(setting_name, None)
-            if isinstance(value, str):
+            if not value is None:
                 self.__dict__[setting_name] = arguments[setting_name]
                 del arguments[setting_name]
             elif are_mandatory_configs_required:
-                raise AttributeError(f"Mandatory argument {setting_name} is not defined or it is not a string")
+                raise AttributeError(f"Mandatory argument {setting_name} is not defined")
         
         # Store remaining optional configs
         for (opt_setting_name, opt_setting_value) in arguments.items():
-            if opt_setting_name in self.optional_configs_names:                
+            if opt_setting_name in self.optional_configs_names:
                 if isinstance(opt_setting_value, str) or isinstance(opt_setting_value, int) or \
                 isinstance(opt_setting_value, float) or isinstance(opt_setting_value, bool):
                     self.__dict__[opt_setting_name] = opt_setting_value
@@ -1701,12 +1701,13 @@ class TRI():
     #region ########## Data reading ##########
 
     def read_data(self) -> pd.DataFrame:
-        if self.data_file_path.endswith(".json"):
+        data_df = self.dataframe
+        """if self.data_file_path.endswith(".json"): # TODO: Check if definitely remove this
             data_df = pd.read_json(self.data_file_path)
         elif self.data_file_path.endswith(".csv"):
             data_df = pd.read_csv(self.data_file_path)
         else:
-            raise Exception(f"Unrecognized file extension for data file [{self.data_file_path}]. Compatible formats are JSON and CSV.")
+            raise Exception(f"Unrecognized file extension for data file [{self.data_file_path}]. Compatible formats are JSON and CSV.")"""
         
         # Check required columns exist
         if not self.individual_name_column in data_df.columns:
@@ -1836,7 +1837,7 @@ class TRI():
     def document_curation(self, train_df:pd.DataFrame, eval_dfs:dict):
         spacy_nlp = self.load_spacy_nlp()
 
-        # Perform preprocessing for both training and evaluation
+        # Perform curation for both training and evaluation
         self.curate_df(train_df, spacy_nlp)
         for eval_df in eval_dfs.values():
             self.curate_df(eval_df, spacy_nlp)
@@ -1851,7 +1852,7 @@ class TRI():
         # Process the text column (discarting the first one, that is the name column)
         column_name = df.columns[1]
         texts = df[column_name]
-        for i, text in enumerate(tqdm(texts, desc=f"Preprocessing {column_name} documents")):
+        for i, text in enumerate(tqdm(texts, desc=f"Curating {column_name} documents")):
             doc = spacy_nlp(text) # Usage of spaCy (https://spacy.io/)
             new_text = ""   # Start text string
             for token in doc:
@@ -2048,7 +2049,7 @@ class TRI():
     #region ########## Save finetuned TRI model ##########
 
     def save_finetuned_tri_pipeline(self, tri_model, tokenizer):
-        pipe = pipeline("text-classification", model=tri_model, tokenizer=tokenizer)
+        pipe = pipeline("text-classification", model=tri_model, tokenizer=tokenizer, device=self.device)
         pipe.save_pretrained(self.tri_pipe_path)
         tri_model = tri_model.to(self.device) # Saving moves model to CPU, return it to defined DEVICE
         return pipe, tri_model

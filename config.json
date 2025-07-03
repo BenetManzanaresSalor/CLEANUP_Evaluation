@@ -14,7 +14,11 @@
         "_RecallPerEntity":{},
         "_TPI": {},
         "_TPS": {},
-        "NMI":{},
+        "_NMI":{},
+        "TRIR":{
+            "output_folder_path": "outputs/WikiActors/50_eval",
+            "background_knowledge_file_path": "TO BE DEFINED"
+        },
         "_TRIR":{
             "output_folder_path": "outputs/WikiActors/50_eval",
             "data_file_path": "data/WikiActors_50_eval.json",
