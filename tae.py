@@ -30,7 +30,6 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import normalized_mutual_info_score, silhouette_score
 
 import logging
-logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s', level=logging.INFO) # Configure logging
 
 import en_core_web_lg # This model is leveraged for every spaCy usage (https://spacy.io/models/en#en_core_web_lg) #TODO: Change this from TRI to existing en_core_web_md?
 
@@ -700,7 +699,7 @@ class TAE:
                             output = partial_eval_func(masked_docs)
                         
                         metric_results[anon_name] = output[0] if isinstance(output, tuple) else output  # If tuple, the first is metric's value
-                        logging.info(f"{metric_name} for {anon_name}: {metric_results[anon_name]}")
+                        #logging.info(f"{metric_name} for {anon_name}: {metric_results[anon_name]}") #TODO: Check if remove this
             
             # Save results
             results[metric_name] = metric_results
@@ -710,7 +709,7 @@ class TAE:
             # Show results all together for easy comparison
             msg = f"Results for {metric_name}:"
             for name, value in results[metric_name].items():
-                msg += f"\n\t{name}: {value}"
+                msg += f"\n\t\t\t\t\t{name}: {value}" #TODO: Check this tabs
             logging.info(msg)
         
         return results
@@ -1255,7 +1254,7 @@ class TAE:
         
         # Collect embeddings
         mask_marks_re_pattern = "|".join([m.upper() for m in mask_marks])
-        for corpus in tqdm(corpora, desc="Extracting embeddings"):
+        for corpus in tqdm(corpora, desc="Computing embeddings"):
             # Remove mask marks if required
             if remove_mask_marks:
                 corpus = [re.sub(mask_marks_re_pattern, "", text).strip() for text in corpus]            
@@ -1349,19 +1348,22 @@ class TAE:
     #region TRIR
 
     def get_TRIR(self, anonymizations:Dict[str, List[MaskedDocument]], 
-                 output_folder_path:str, background_knowledge_file_path:str):
+                 background_knowledge_file_path:str, output_folder_path:str,
+                 verbose:bool=True, **kwargs): #TODO: Add verbose to each metric
         corpora = self._get_anonymization_corpora(anonymizations)
         dataframe = pd.DataFrame.from_dict(corpora)
+        #TODO: Load background_knowledge_file_path
+        #TODO: Add it to the dataframe
 
-        tri = TRI(output_folder_path=output_folder_path,
+        tri = TRI(
             dataframe=dataframe,
-            individual_name_column=DOC_ID_KEY,
             background_knowledge_column=TEXT_KEY,#TODO: =BACKGROUND_KNOWLEDGE_KEY,
-            anonymize_background_knowledge=False, #TODO: Pass parameters (after testing)
-            use_document_curation=False)
+            output_folder_path=output_folder_path,
+            individual_name_column=DOC_ID_KEY,
+            **kwargs)
         
-        results = tri.run()
-        results = {anon_name:values["eval_Accuracy"] for anon_name, values in results.items()}
+        results = tri.run(verbose=verbose) #TODO: Check this verbose
+        results = {anon_name:values["eval_Accuracy"]/100 for anon_name, values in results.items()} # All in the 0 to 1 range
 
         return results
 
@@ -2186,9 +2188,9 @@ class TRI():
         
         # Show results
         if verbose:
-            for dataset_name, res in self.trir_results.items():
+            for anon_name, res in self.trir_results.items():
                 #res_key = list(filter(lambda x:x.endswith("_Accuracy"), res.keys()))[0]
-                logging.info(f"TRIR {dataset_name} = {res['eval_Accuracy']}%")
+                logging.info(f"TRIR for {anon_name} = {res['eval_Accuracy']}%")
         
         if verbose: logging.info("######### END: PREDICT TRIR #########")
         
@@ -2556,6 +2558,15 @@ def get_TRI_accuracy(results):
 #region Main
 
 if __name__ == "__main__":
+
+    #region Additional configurations for running standalone
+
+    logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s', level=logging.INFO) # Configure logging
+    logging.getLogger('sentence_transformers').setLevel(logging.WARNING) # Suppress INFO logs from sentence_transformers
+    logging.getLogger('transformers').setLevel(logging.WARNING)  # Suppress INFO logs from transformers
+    logging.getLogger('torch').setLevel(logging.WARNING)         # Suppress INFO logs from torch
+
+    #endregion
 
     #region Arguments parsing
 
