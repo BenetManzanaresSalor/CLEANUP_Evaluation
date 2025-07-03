@@ -6,16 +6,16 @@
     },
     "results_file_path": "results.csv",
     "metrics":{
-        "Precision":{},
+        "_Precision":{},
         "_Precision_IC":{
             "token_weighting": "IC"
         },
-        "Recall": {},
-        "RecallPerEntity":{},
+        "_Recall": {},
+        "_RecallPerEntity":{},
         "_TPI": {},
         "_TPS": {},
-        "_NMI":{},
-        "TRIR":{
+        "NMI":{},
+        "_TRIR":{
             "output_folder_path": "outputs/WikiActors/50_eval",
             "data_file_path": "data/WikiActors_50_eval.json",
             "individual_name_column": "name",

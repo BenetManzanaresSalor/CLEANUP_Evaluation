@@ -129,7 +129,7 @@ TPS_SIMILARITY_MODEL_NAME = "paraphrase-albert-base-v2" # From the Sentence-Tran
 
 
 # Default settings for NMI
-NMI_EMBEDDING_MODEL_NAME = "bert-base-cased" # Options: "all-MiniLM-L6-v2", "all-mpnet-base-v2" others from https://www.sbert.net/docs/sentence_transformer/pretrained_models.html or classic models such as "bert-base-cased" 
+NMI_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2" # Options: "all-MiniLM-L6-v2", "all-mpnet-base-v2" others from https://www.sbert.net/docs/sentence_transformer/pretrained_models.html or classic models such as "bert-base-cased" 
 NMI_MIN_K = 2
 NMI_MAX_K = 32
 NMI_K_MULTIPLIER = 2
@@ -447,7 +447,8 @@ class ICTokenWeighting(TokenWeighting):
         self.max_segment_length = max_segment_size
         self.model_name = model_name
         self.device = device
-                
+    
+    # TODO: Implement a batched version
     def get_weights(self, text:str, text_spans:List[Tuple[int,int]]) -> np.ndarray:
         """Returns a list of numeric information content weights, where each value
         corresponds to -log(probability of predicting the value of the text span
@@ -683,12 +684,20 @@ class TAE:
             # Otherwise, compute metric for each anonymization
             else:
                 metric_results = {}
+                ICs_dict = None # ICs cache for TPI and TPS
                 with tqdm(anonymizations.items(), desc="Processing each anonymization") as pbar:
                     for anon_name, masked_docs in pbar:
                         pbar.set_description(f"Processing {anon_name} anonymization")
-                        output = partial_eval_func(masked_docs)                        
+
+                        # For TPI and TPS, cache ICs
+                        if partial_eval_func.func==self.get_TPI or partial_eval_func.func==self.get_TPS:
+                            output = partial_eval_func(masked_docs, ICs_dict=ICs_dict)
+                            ICs_dict = output[2]
+                        # Otherwise, normal computation
+                        else:
+                            output = partial_eval_func(masked_docs)
+                        
                         metric_results[anon_name] = output[0] if isinstance(output, tuple) else output  # If tuple, the first is metric's value
-                        #TODO: Print info as being computed?
                         logging.info(f"{metric_name} for {anon_name}: {metric_results[anon_name]}")
             
             # Save results
@@ -696,11 +705,11 @@ class TAE:
             if not results_file_path is None: #TODO: CSV is maybe a bad format for complex results such as those from recall_per_entity_type. Is JSON better instead (worse for Excel)
                 self._write_into_results(results_file_path, [metric_name]+list(metric_results.values()))
             
-            # Show results together for easy comparison
+            # Show results all together for easy comparison
             msg = f"Results for {metric_name}:"
             for name, value in results[metric_name].items():
                 msg += f"\n\t{name}: {value}"
-            logging.info(msg)            
+            logging.info(msg)
         
         return results
 
@@ -905,11 +914,62 @@ class TAE:
     
 
     #region TPS and TPI
+    
+    def get_TPI(self, masked_docs:List[MaskedDocument], term_alterning=TPI_TERM_ALTERNING,
+            use_chunking:bool=TPI_USE_CHUNKING, token_weighting:Optional[TokenWeighting]=None, 
+            ICs_dict:Optional[Dict[str,np.ndarray]]=None) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
+        tpi_array = np.empty(len(masked_docs))
+        if ICs_dict is None:
+            ICs_dict = {}
+        IC_multiplier_array = np.empty(len(masked_docs))
+
+        # Default token_weighting is IC-based
+        if token_weighting is None:
+            token_weighting = self.ic_weighting
+
+        for i, masked_doc in enumerate(masked_docs):
+            doc = self.documents[masked_doc.doc_id]
+
+            # Get terms spans and mask
+            spans = self._get_terms_spans(doc.spacy_doc, use_chunking=use_chunking)
+            masked_spans = self._filter_masked_spans(doc, masked_doc)
+            spans_mask = self._get_spans_mask(spans, masked_spans) # Non-masked=True(1), Masked=False(0)
+
+            # Get IC for all spans
+            if masked_doc.doc_id in ICs_dict:
+                spans_IC = ICs_dict[masked_doc.doc_id]
+            else:
+                spans_IC = self._get_ICs(spans, doc, term_alterning, token_weighting)
+                ICs_dict[masked_doc.doc_id] = spans_IC # Store ICs (useful as cache)
+            
+            # Get TIC of the original and masked documents
+            original_TIC = spans_IC.sum()
+            masked_TIC = spans_IC[spans_mask].sum()
+
+            # Compute document TPI
+            tpi_array[i] = masked_TIC / original_TIC if original_TIC != 0 else 0
+
+            # Compute document IC multiplier
+            n_terms = len(spans)
+            n_masked_terms = np.count_nonzero(spans_mask==0)
+            info_loss = original_TIC - masked_TIC
+            masked_term_IC = info_loss / n_masked_terms if n_masked_terms != 0 else 0
+            n_nonmasked_terms = n_terms - n_masked_terms
+            nonmasked_term_IC = masked_TIC / n_nonmasked_terms if n_nonmasked_terms != 0 else 0
+            IC_multiplier_array[i] = masked_term_IC / nonmasked_term_IC if nonmasked_term_IC != 0 else 0
+
+        # Get corpus TPI as the mean
+        tpi = tpi_array.mean()
+
+        return tpi, tpi_array, ICs_dict, IC_multiplier_array
 
     def get_TPS(self, masked_docs:List[MaskedDocument], term_alterning=TPS_TERM_ALTERNING,
                 similarity_model_name:str=TPS_SIMILARITY_MODEL_NAME,
-                use_chunking:bool=TPS_USE_CHUNKING, token_weighting:Optional[TokenWeighting]=None) -> Tuple[float, np.ndarray, np.ndarray]:
+                use_chunking:bool=TPS_USE_CHUNKING, token_weighting:Optional[TokenWeighting]=None,
+                ICs_dict:Optional[Dict[str,np.ndarray]]=None) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
         tps_array = np.empty(len(masked_docs))
+        if ICs_dict is None:
+            ICs_dict = {}
         similarity_array = []
         
         # Load embedding model and function for similarity
@@ -920,14 +980,18 @@ class TAE:
             token_weighting = self.ic_weighting
         
         # Process each masked document
-        for i, masked_doc in enumerate(masked_docs):
+        for idx, masked_doc in enumerate(masked_docs):
             doc = self.documents[masked_doc.doc_id]
 
             # Get text spans
             spans = self._get_terms_spans(doc.spacy_doc, use_chunking=use_chunking)
 
             # Get IC for all spans
-            spans_IC = self._get_ICs(spans, doc, term_alterning, token_weighting)
+            if masked_doc.doc_id in ICs_dict:
+                spans_IC = ICs_dict[masked_doc.doc_id]
+            else:
+                spans_IC = self._get_ICs(spans, doc, term_alterning, token_weighting)
+                ICs_dict[masked_doc.doc_id] = spans_IC # Store ICs (useful as cache)
 
             # Get replacements, corresponding masked texts and corresponding spans indexes
             repl_out = self._get_replacements_info(masked_doc, doc, spans)
@@ -955,9 +1019,9 @@ class TAE:
             # Get TPS
             masked_TIC_sim = (spans_IC * spans_sims).sum()
             original_TIC = spans_IC.sum()
-            tps_array[i] = masked_TIC_sim / original_TIC
+            tps_array[idx] = masked_TIC_sim / original_TIC
         
-        # Dispose embedding model and token_weighting
+        # Dispose embedding model
         if not embedding_model is None:
             del embedding_model
             gc.collect()
@@ -970,48 +1034,7 @@ class TAE:
         # All similarities to NumPy array
         similarity_array = np.array(similarity_array)
 
-        return tps, tps_array, similarity_array
-
-    def get_TPI(self, masked_docs:List[MaskedDocument], term_alterning=TPI_TERM_ALTERNING,
-            use_chunking:bool=TPI_USE_CHUNKING, token_weighting:Optional[TokenWeighting]=None) -> Tuple[float, np.ndarray, np.ndarray]:
-        tpi_array = np.empty(len(masked_docs))
-        IC_multiplier_array = np.empty(len(masked_docs))        
-
-        # Default token_weighting is IC-based
-        if token_weighting is None:
-            token_weighting = self.ic_weighting
-
-        for i, masked_doc in enumerate(masked_docs):
-            doc = self.documents[masked_doc.doc_id]
-
-            # Get terms spans and mask
-            spans = self._get_terms_spans(doc.spacy_doc, use_chunking=use_chunking)
-            masked_spans = self._filter_masked_spans(doc, masked_doc)
-            spans_mask = self._get_spans_mask(spans, masked_spans) # Non-masked=True(1), Masked=False(0)
-
-            # Get IC for all spans
-            spans_IC = self._get_ICs(spans, doc, term_alterning, token_weighting)
-            
-            # Get TIC of the original and masked documents
-            original_TIC = spans_IC.sum()
-            masked_TIC = spans_IC[spans_mask].sum()
-
-            # Compute document TPI
-            tpi_array[i] = masked_TIC / original_TIC if original_TIC != 0 else 0
-
-            # Compute document IC multiplier
-            n_terms = len(spans)
-            n_masked_terms = np.count_nonzero(spans_mask==0)
-            info_loss = original_TIC - masked_TIC
-            masked_term_IC = info_loss / n_masked_terms if n_masked_terms != 0 else 0
-            n_nonmasked_terms = n_terms - n_masked_terms
-            nonmasked_term_IC = masked_TIC / n_nonmasked_terms if n_nonmasked_terms != 0 else 0
-            IC_multiplier_array[i] = masked_term_IC / nonmasked_term_IC if nonmasked_term_IC != 0 else 0
-
-        # Get corpus TPI as the mean
-        tpi = tpi_array.mean()
-
-        return tpi, tpi_array, IC_multiplier_array
+        return tps, tps_array, ICs_dict, similarity_array
 
     def _get_terms_spans(self, spacy_doc:spacy.tokens.Doc, use_chunking:bool=True) -> List[Tuple[int, int]]:
         text_spans = []
@@ -1130,7 +1153,7 @@ class TAE:
 
         return spans_IC
     
-    def _get_spans_ICs(self, spans: List[Tuple[int, int]], doc:Document, token_weighting: TokenWeighting, context_span=None) -> np.ndarray:
+    def _get_spans_ICs(self, spans: List[Tuple[int,int]], doc:Document, token_weighting: TokenWeighting, context_span:Optional[Tuple[int,int]]=None) -> np.ndarray:
         # By default, context span is all the document
         if context_span is None:
             context_span = (0, len(doc.text))
@@ -1205,22 +1228,9 @@ class TAE:
         corpora_embeddings = self._get_corpora_embeddings(corpora, clustering_embedding_model_name,
                                                    remove_mask_marks=remove_mask_marks, mask_marks=mask_marks)
         
-        # For multiple ks, use results with maximum silhouette        
-        outputs_by_k = {}
-        max_silhouette = float("-inf")
-        best_k = None
-        k = min_k
-        while k <= max_k:
-            # Clustering for this k
-            outputs_by_k[k] = self._get_corpora_multiclustering(corpora_embeddings, k, n_clusterings=n_clusterings,
-                                                              n_tries_per_clustering=n_tries_per_clustering)            
-            avg_silhouettee = outputs_by_k[k][2].mean() # Average of true_silhouettes
-            if avg_silhouettee > max_silhouette:
-                max_silhouette, best_k = avg_silhouettee, k
-            k *= k_multiplier # By default, duplicate k
-
-        logging.info(f"Clustering results for k={best_k} were selected because they correspond to the maximum silhouette ({max_silhouette:.2f})")
-        values, all_labels, true_silhouettes = outputs_by_k[best_k]
+        # Clustering results based on the maximum silhouette
+        values, all_labels, true_silhouettes = self._silhouette_based_NMI(corpora_embeddings, min_k=min_k, max_k=max_k, k_multiplier=k_multiplier,
+                                                                      n_clusterings=n_clusterings, n_tries_per_clustering=n_tries_per_clustering)
         
         # Prepare results        
         values = values[1:] # Remove result for the first corpus (ground truth defined by the original texts)
@@ -1287,6 +1297,28 @@ class TAE:
 
     #region Clustering
 
+    def _silhouette_based_NMI(self, corpora_embeddings:List[np.ndarray], min_k:int=NMI_MIN_K, max_k:int=NMI_MAX_K,
+                k_multiplier:int=NMI_K_MULTIPLIER, n_clusterings:int=NMI_N_CLUSTERINGS, 
+                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING):
+        # For multiple ks, use results with maximum silhouette        
+        outputs_by_k = {}
+        max_silhouette = float("-inf")
+        best_k = None
+        k = min_k
+        while k <= max_k:
+            # Clustering for this k
+            outputs_by_k[k] = self._get_corpora_multiclustering(corpora_embeddings, k, n_clusterings=n_clusterings,
+                                                              n_tries_per_clustering=n_tries_per_clustering)            
+            avg_silhouettee = outputs_by_k[k][2].mean() # Average of true_silhouettes
+            if avg_silhouettee > max_silhouette:
+                max_silhouette, best_k = avg_silhouettee, k
+            k *= k_multiplier # By default, duplicate k
+
+        logging.info(f"Clustering results for k={best_k} were selected because they correspond to the maximum silhouette ({max_silhouette:.2f})")
+        values, all_labels, true_silhouettes = outputs_by_k[best_k]
+
+        return values, all_labels, true_silhouettes
+
     def _get_corpora_multiclustering(self, corpora_embeddings:List[np.ndarray], k:int, n_clusterings:int=NMI_N_CLUSTERINGS,
                                 n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, np.ndarray]:
         results = np.empty((n_clusterings, len(corpora_embeddings)))
@@ -1294,7 +1326,7 @@ class TAE:
         for clustering_idx in tqdm(range(n_clusterings), desc=f"Clustering k={k}"):
             true_labels, corpora_labels, true_silhouettes[clustering_idx] = self._get_corpora_clustering(corpora_embeddings, k,
                                                                                                         tries_per_clustering=n_tries_per_clustering)
-            results[clustering_idx, :] = self._compare_clusterings(true_labels, corpora_labels, normalized_mutual_info_score)
+            results[clustering_idx, :] = self._compare_clusterings(true_labels, corpora_labels)
 
         # Average for the n_clusterings
         results = results.mean(axis=0)
@@ -1320,7 +1352,8 @@ class TAE:
         labels = kmeanspp.fit_predict(corpus_embeddings)
         return labels
 
-    def _compare_clusterings(self, true_labels:np.ndarray, corpora_labels:List[np.ndarray], eval_metric) -> np.ndarray:
+    def _compare_clusterings(self, true_labels:np.ndarray, corpora_labels:List[np.ndarray],
+                             eval_metric=normalized_mutual_info_score) -> np.ndarray:
         metrics = np.empty(len(corpora_labels))
         
         for idx, corpus_labels in enumerate(corpora_labels):
@@ -2542,6 +2575,8 @@ if __name__ == "__main__":
 
 
     #region Initialization
+
+    logging.info(f"Device for models: {DEVICE}")
 
     # Create TAE from corpus
     corpus_file_path = config[CORPUS_CONFIG_KEY]
