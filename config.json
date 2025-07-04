@@ -18,25 +18,22 @@
     },
     "results_file_path": "results.csv",
     "metrics":{
-        "_Precision":{},
-        "_Precision_IC":{
-            "token_weighting": "IC"
+        "Precision":{},
+        "Precision_IC":{
+            "weighting_model_name": "google-bert/bert-base-uncased"
         },
         "_Recall": {},
         "_RecallPerEntity":{},
-        "_TPI": {},
-        "_TPS": {},
-        "NMI_minilm":{
-            "embedding_model_name":"all-MiniLM-L6-v2",
-            "max_k":256
+        "TPI": {},
+        "TPS": {},
+        "_NMI_minilm":{
+            "embedding_model_name":"all-MiniLM-L6-v2"
         },
-        "NMI_mpnet":{
-            "embedding_model_name":"all-mpnet-base-v2",
-            "max_k":256
+        "_NMI_mpnet":{
+            "embedding_model_name":"all-mpnet-base-v2"
         },
-        "NMI_bert":{
-            "embedding_model_name":"bert-base-cased",
-            "max_k":256
+        "_NMI_bert":{
+            "embedding_model_name":"bert-base-cased"
         },
         "_TRIR":{
             "output_folder_path": "outputs/WikiActors/50_eval",

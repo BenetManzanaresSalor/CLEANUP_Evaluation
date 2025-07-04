@@ -83,12 +83,8 @@ METRICS_REQUIRING_GOLD_ANNOTATIONS = [PRECISION_METRIC_NAME, RECALL_METRIC_NAME,
 #region General settings
 
 SPACY_MODEL_NAME = "en_core_web_md"
-IC_WEIGHTING_MODEL_NAME = "google-bert/bert-base-uncased" #TODO: Define it as parameter
-TOKEN_WEIGHTING_KEY = "token_weighting"
-IC_WEIGHTING_NAME = "IC"
+IC_WEIGHTING_MODEL_NAME = "google-bert/bert-base-uncased" #TODO: Update this and all other models
 IC_WEIGHTING_MAX_SEGMENT_LENGTH = 100
-UNIFORM_WEIGHTING_NAME = "Uniform"
-TOKEN_WEIGHTING_NAMES = [IC_WEIGHTING_NAME, UNIFORM_WEIGHTING_NAME]
 BACKGROUND_KNOWLEDGE_KEY = "background_knowledge" # For TRIR background knowledge file
 
 # POS tags, tokens or characters that can be ignored from the recall scores 
@@ -143,7 +139,7 @@ NMI_REMOVE_MASK_MARKS = False
 NMI_N_CLUSTERINGS = 5
 NMI_N_TRIES_PER_CLUSTERING = 50
 
-#TODO: Default settings for TRIR
+# Default settings for TRIR are defined in the TRI class
 
 
 #endregion
@@ -436,16 +432,17 @@ class ICTokenWeighting(TokenWeighting):
     information content, and therefore a high weight, whereas a token which can
     be predicted from its content will received a low weight."""
 
-    max_segment_size:int
+    max_segment_length:int
     model_name:str
     device:str
 
     model=None
     tokenizer=None
     
-    def __init__(self, max_segment_size:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH, model_name:str=IC_WEIGHTING_MODEL_NAME, device:str=DEVICE):
+    def __init__(self, max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH,
+                 model_name:str=IC_WEIGHTING_MODEL_NAME, device:str=DEVICE):
         """Initialises the BERT tokenizers and masked language model"""
-        self.max_segment_length = max_segment_size
+        self.max_segment_length = max_segment_length
         self.model_name = model_name
         self.device = device
     
@@ -602,11 +599,14 @@ class TAE:
     """Text Anonymization Evaluator (TAE), defined by the corpus for text anonymization.
     Optionally, the corpus can include gold annotations, used for precision and recall metrics."""
 
+    #region Attributes
+
     documents:Dict[str, Document]
     spacy_nlp=None
     gold_annotations_ratio:int
-    ic_weighting:ICTokenWeighting
-    uniform_weighting:UniformTokenWeighting
+
+    #endregion
+
 
     #region Initialization
     
@@ -640,10 +640,6 @@ class TAE:
         self.gold_annotations_ratio = n_docs_with_annotations / len(self.documents)
         logging.info(f"Number of gold annotated documents: {n_docs_with_annotations} ({self.gold_annotations_ratio:.3%})")
 
-        # Create both token weighting types
-        self.ic_weighting = ICTokenWeighting()
-        self.uniform_weighting = UniformTokenWeighting()
-
     @classmethod
     def from_file_path(cls, corpus_file_path:str):
         with open(corpus_file_path, encoding="utf-8") as f:
@@ -672,6 +668,7 @@ class TAE:
             logging.info(f"########################### Computing {metric_name} metric ###########################")
             metric_key = metric_name.split("_")[0] # Text before first underscore is name of the metric, the rest is freely used
             partial_eval_func = self._get_partial_eval_func(metric_key, metric_parameters)
+            #TODO: If any error happens, notify and skip to the next metric
 
             # If metric is invalid, results are None
             if partial_eval_func is None:
@@ -704,7 +701,7 @@ class TAE:
             # Save results
             results[metric_name] = metric_results
             if not partial_eval_func is None: # TODO: Check if preserve this
-                if not results_file_path is None: #TODO: CSV is maybe a bad format for complex results such as those from recall_per_entity_type. Is JSON better instead (worse for Excel)
+                if not results_file_path is None: #TODO: CSV is maybe a bad format for complex results such as those from recall_per_entity_type. Is JSON better instead? (worse for Excel)
                     self._write_into_results(results_file_path, [metric_name]+list(metric_results.values()))
             
             # Show results all together for easy comparison
@@ -734,20 +731,11 @@ class TAE:
                 logging.warning(f"Metric {metric_key} (from {name}) is unknown, therefore its results will be None | Options: {METRIC_NAMES}") #TODO: Maybe this can become an logging.error after testing
             elif name in METRICS_REQUIRING_GOLD_ANNOTATIONS and self.gold_annotations_ratio < 1:
                 raise RuntimeError(f"Metric {name} depends on gold annotations, but these are not present for all documents (only for a {self.gold_annotations_ratio:.3%})")
-            elif TOKEN_WEIGHTING_KEY in parameters and not parameters[TOKEN_WEIGHTING_KEY] in TOKEN_WEIGHTING_NAMES:
-                raise RuntimeError(f"Metric {name} has an invalid {TOKEN_WEIGHTING_KEY} ({parameters[TOKEN_WEIGHTING_KEY]}) | Options: {TOKEN_WEIGHTING_NAMES}")
 
     def _get_partial_eval_func(self, name:str, parameters:dict) -> Optional[partial]:
         partial_func = None # Result would be None if name is invalid
-
-        # Replace token weighting string sentence by the proper instance of TokenWeighting
-        if TOKEN_WEIGHTING_KEY in parameters:
-            if parameters[TOKEN_WEIGHTING_KEY]==IC_WEIGHTING_NAME:
-                parameters[TOKEN_WEIGHTING_KEY] = self.ic_weighting
-            elif parameters[TOKEN_WEIGHTING_KEY]==UNIFORM_WEIGHTING_NAME:
-                parameters[TOKEN_WEIGHTING_KEY] = self.uniform_weighting
         
-        # Get the partial function
+        # Get the partial function #TODO: Transform into dicionary?
         if name == PRECISION_METRIC_NAME:
             partial_func = partial(self.get_precision, **parameters)
         elif name == RECALL_METRIC_NAME:
@@ -785,25 +773,30 @@ class TAE:
 
     #region Precision
             
-    def get_precision(self, masked_docs:List[MaskedDocument], token_weighting:Optional[TokenWeighting]=None, 
+    def get_precision(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=None,
+                      weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH,
                       token_level:bool=PRECISION_TOKEN_LEVEL) -> float:
         """Returns the weighted, token-level precision of the masked spans when compared 
         to the gold annotations. Arguments:
         - masked_docs: documents together with spans masked by the system
-        - token_weighting: mechanism for weighting the information content of each token
+        - weighting_model_name: name of the model for information content weighting
+        - token_level: If token_level is set to true, the precision is computed at the level of tokens, 
+        otherwise the precision is at the mention-level. 
         
-        If token_level is set to true, the precision is computed at the level of tokens, 
-        otherwise the precision is at the mention-level. The masked spans/tokens are weighted 
-        by their information content, given the provided weighting scheme. If annotations from 
-        several annotators are available for a given document, the precision corresponds to a 
-        micro-average over the annotators."""
+        The masked spans/tokens are weighted by their information content, given the provided
+        weighting scheme. If annotations from several annotators are available for a given
+        document, the precision corresponds to a micro-average over the annotators."""
         
         weighted_true_positives = 0.0
         weighted_system_masks = 0.0
 
-        # Default token_weighting is Uniform
-        if token_weighting is None:
-            token_weighting = self.uniform_weighting
+        # Define token weighting
+        if weighting_model_name is None:
+            token_weighting = UniformTokenWeighting()
+        
+        else:
+            token_weighting = ICTokenWeighting(model_name=weighting_model_name,
+                                               max_segment_length=weighting_max_segment_length)
                 
         for doc in masked_docs:
             gold_doc = self.documents[doc.doc_id]
@@ -830,6 +823,11 @@ class TAE:
                 # And update the (weighted) counts
                 weighted_true_positives += (len(annotators) * weight)
                 weighted_system_masks += (nb_annotators * weight)
+        
+        # Dispose token weighting
+        del token_weighting
+
+        # Return results
         try:
             return weighted_true_positives / weighted_system_masks
         except ZeroDivisionError:
@@ -917,18 +915,24 @@ class TAE:
 
     #region TPS and TPI
     
-    def get_TPI(self, masked_docs:List[MaskedDocument], term_alterning=TPI_TERM_ALTERNING,
-            use_chunking:bool=TPI_USE_CHUNKING, token_weighting:Optional[TokenWeighting]=None, 
+    def get_TPI(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=IC_WEIGHTING_MODEL_NAME,
+            weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH, 
+            term_alterning=TPI_TERM_ALTERNING, use_chunking:bool=TPI_USE_CHUNKING,
             ICs_dict:Optional[Dict[str,np.ndarray]]=None) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
+        # Initialize outputs
         tpi_array = np.empty(len(masked_docs))
         if ICs_dict is None:
             ICs_dict = {}
         IC_multiplier_array = np.empty(len(masked_docs))
 
-        # Default token_weighting is IC-based
-        if token_weighting is None:
-            token_weighting = self.ic_weighting
+        # Define token weighting
+        if weighting_model_name is None:
+            token_weighting = UniformTokenWeighting()        
+        else:
+            token_weighting = ICTokenWeighting(model_name=weighting_model_name,
+                                               max_segment_length=weighting_max_segment_length)
 
+        # For each masked document
         for i, masked_doc in enumerate(masked_docs):
             doc = self.documents[masked_doc.doc_id]
 
@@ -939,7 +943,7 @@ class TAE:
 
             # Get IC for all spans
             if masked_doc.doc_id in ICs_dict:
-                spans_IC = ICs_dict[masked_doc.doc_id]
+                spans_IC = ICs_dict[masked_doc.doc_id] # Use precomputed ICs
             else:
                 spans_IC = self._get_ICs(spans, doc, term_alterning, token_weighting)
                 ICs_dict[masked_doc.doc_id] = spans_IC # Store ICs (useful as cache)
@@ -960,26 +964,34 @@ class TAE:
             nonmasked_term_IC = masked_TIC / n_nonmasked_terms if n_nonmasked_terms != 0 else 0
             IC_multiplier_array[i] = masked_term_IC / nonmasked_term_IC if nonmasked_term_IC != 0 else 0
 
+        # Dispose token weighting
+        del token_weighting
+
         # Get corpus TPI as the mean
         tpi = tpi_array.mean()
 
         return tpi, tpi_array, ICs_dict, IC_multiplier_array
 
-    def get_TPS(self, masked_docs:List[MaskedDocument], term_alterning=TPS_TERM_ALTERNING,
-                similarity_model_name:str=TPS_SIMILARITY_MODEL_NAME,
-                use_chunking:bool=TPS_USE_CHUNKING, token_weighting:Optional[TokenWeighting]=None,
-                ICs_dict:Optional[Dict[str,np.ndarray]]=None) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
+    def get_TPS(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=IC_WEIGHTING_MODEL_NAME,
+            weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH, term_alterning=TPS_TERM_ALTERNING,
+            similarity_model_name:str=TPS_SIMILARITY_MODEL_NAME, use_chunking:bool=TPS_USE_CHUNKING,
+            ICs_dict:Optional[Dict[str,np.ndarray]]=None) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
+        # Initialize outputs
         tps_array = np.empty(len(masked_docs))
         if ICs_dict is None:
             ICs_dict = {}
         similarity_array = []
+
+        # Define token weighting
+        if weighting_model_name is None:
+            token_weighting = UniformTokenWeighting()
+        
+        else:
+            token_weighting = ICTokenWeighting(model_name=weighting_model_name,
+                                               max_segment_length=weighting_max_segment_length)
         
         # Load embedding model and function for similarity
         embedding_func, embedding_model = self._get_embedding_func(similarity_model_name)
-
-        # Default token_weighting is IC-based
-        if token_weighting is None:
-            token_weighting = self.ic_weighting
         
         # Process each masked document
         for idx, masked_doc in enumerate(masked_docs):
@@ -990,7 +1002,7 @@ class TAE:
 
             # Get IC for all spans
             if masked_doc.doc_id in ICs_dict:
-                spans_IC = ICs_dict[masked_doc.doc_id]
+                spans_IC = ICs_dict[masked_doc.doc_id] # Use precomputed ICs
             else:
                 spans_IC = self._get_ICs(spans, doc, term_alterning, token_weighting)
                 ICs_dict[masked_doc.doc_id] = spans_IC # Store ICs (useful as cache)
@@ -1023,12 +1035,15 @@ class TAE:
             original_TIC = spans_IC.sum()
             tps_array[idx] = masked_TIC_sim / original_TIC
         
+        # Dispose token weighting
+        del token_weighting
+
         # Dispose embedding model
         if not embedding_model is None:
             del embedding_model
             gc.collect()
             if torch.cuda.is_available():
-                torch.cuda.empty_cache()                
+                torch.cuda.empty_cache()             
 
         # Get mean TPS
         tps = tps_array.mean()
