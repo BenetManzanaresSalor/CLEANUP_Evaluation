@@ -50,8 +50,8 @@ MANDATORY_CONFIG_KEYS = [CORPUS_CONFIG_KEY, ANONYMIZATIONS_CONFIG_KEY, RESULTS_C
 
 # Corpus dictionary keys
 DOC_ID_KEY = "doc_id"
-TEXT_KEY = "text"
-MANDATORY_CORPUS_KEYS = [DOC_ID_KEY, TEXT_KEY]
+ORIGINAL_TEXT_KEY = "text"
+MANDATORY_CORPUS_KEYS = [DOC_ID_KEY, ORIGINAL_TEXT_KEY]
 GOLD_ANNOTATIONS_KEY = "annotations"
 ENTITY_MENTIONS_KEY = "entity_mentions"
 ENTITY_ID_KEY = "entity_id"
@@ -135,7 +135,7 @@ TPS_USE_CHUNKING = True
 TPS_SIMILARITY_MODEL_NAME = "paraphrase-albert-base-v2" # From the Sentence-Transformers library
 
 # Default settings for NMI
-NMI_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2" # Options: "all-MiniLM-L6-v2", "all-mpnet-base-v2" others from https://www.sbert.net/docs/sentence_transformer/pretrained_models.html or classic models such as "bert-base-cased" 
+NMI_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2" # Options: "all-MiniLM-L6-v2", "all-mpnet-base-v2" others from https://www.sbert.net/docs/sentence_transformer/pretrained_models.html or classic models such as "bert-base-cased"
 NMI_MIN_K = 2
 NMI_MAX_K = 32
 NMI_K_MULTIPLIER = 2
@@ -625,13 +625,13 @@ class TAE:
                     raise RuntimeError(f"Document {doc.doc_id} missing mandatory key: {key}")
             
             # Parsing the document with spaCy
-            spacy_doc = self.spacy_nlp(doc[TEXT_KEY])
+            spacy_doc = self.spacy_nlp(doc[ORIGINAL_TEXT_KEY])
 
             # Get gold annotations (if present)
             gold_annotations = doc.get(GOLD_ANNOTATIONS_KEY, None)
             
             # Creating the actual document (identifier, text and gold annotations)
-            new_doc = Document(doc[DOC_ID_KEY], doc[TEXT_KEY], spacy_doc, gold_annotations)
+            new_doc = Document(doc[DOC_ID_KEY], doc[ORIGINAL_TEXT_KEY], spacy_doc, gold_annotations)
             self.documents[doc[DOC_ID_KEY]] = new_doc
             if len(new_doc.gold_annotated_entities) > 0:
                 n_docs_with_annotations += 1
@@ -674,7 +674,7 @@ class TAE:
             partial_eval_func = self._get_partial_eval_func(metric_key, metric_parameters)
 
             # If metric is invalid, results are None
-            if partial_eval_func is None:      
+            if partial_eval_func is None:
                 metric_results = {anon_name:None for anon_name in anonymizations.keys()}
 
             # For NMI and TRIR, evaluate all anonymizations at once
@@ -703,8 +703,9 @@ class TAE:
             
             # Save results
             results[metric_name] = metric_results
-            if not results_file_path is None: #TODO: CSV is maybe a bad format for complex results such as those from recall_per_entity_type. Is JSON better instead (worse for Excel)
-                self._write_into_results(results_file_path, [metric_name]+list(metric_results.values()))
+            if not partial_eval_func is None: # TODO: Check if preserve this
+                if not results_file_path is None: #TODO: CSV is maybe a bad format for complex results such as those from recall_per_entity_type. Is JSON better instead (worse for Excel)
+                    self._write_into_results(results_file_path, [metric_name]+list(metric_results.values()))
             
             # Show results all together for easy comparison
             msg = f"Results for {metric_name}:"
@@ -1218,17 +1219,17 @@ class TAE:
     #region NMI
 
     def get_NMI(self, anonymizations:Dict[str, List[MaskedDocument]], min_k:int=NMI_MIN_K, max_k:int=NMI_MAX_K,
-                k_multiplier:int=NMI_K_MULTIPLIER, clustering_embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
+                k_multiplier:int=NMI_K_MULTIPLIER, embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
                 remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=MASKING_MARKS,
                 n_clusterings:int=NMI_N_CLUSTERINGS, n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> np.ndarray:
         
         # Create the corpora
-        orig_corpora = self._get_anonymization_corpora(anonymizations)
-        nmi_corpora = [[doc_dict[TEXT_KEY] for doc_dict in orig_corpora]] # Prepend original texts (ground truth)
-        nmi_corpora += [[doc_dict[anon_name] for doc_dict in orig_corpora] for anon_name in anonymizations.keys()]
+        orig_corpora = self._get_anonymization_corpora(anonymizations, include_original_text=True)
+        nmi_corpora = [[doc_dict[ORIGINAL_TEXT_KEY] for doc_dict in orig_corpora.values()]] # Prepend original texts (ground truth)
+        nmi_corpora += [[doc_dict[anon_name] for doc_dict in orig_corpora.values()] for anon_name in anonymizations.keys()]
 
         # Get the embeddings
-        corpora_embeddings = self._get_corpora_embeddings(nmi_corpora, clustering_embedding_model_name,
+        corpora_embeddings = self._get_corpora_embeddings(nmi_corpora, embedding_model_name,
                                                    remove_mask_marks=remove_mask_marks, mask_marks=mask_marks)
         
         # Clustering results based on the maximum silhouette
@@ -1243,13 +1244,13 @@ class TAE:
 
     #region Embedding/feature extraction
 
-    def _get_corpora_embeddings(self, corpora:List[List[str]], clustering_embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
+    def _get_corpora_embeddings(self, corpora:List[List[str]], embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
                                  remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=MASKING_MARKS,
                                  device:str=DEVICE) -> List[np.ndarray]:
         corpora_embeddings = []
 
         # Load model
-        model = SentenceTransformer(clustering_embedding_model_name, device=device)
+        model = SentenceTransformer(embedding_model_name, device=device)
         model.eval()
         
         # Collect embeddings
@@ -1350,20 +1351,31 @@ class TAE:
     def get_TRIR(self, anonymizations:Dict[str, List[MaskedDocument]], 
                  background_knowledge_file_path:str, output_folder_path:str,
                  verbose:bool=True, **kwargs): #TODO: Add verbose to each metric
+        # Load corpora
         corpora = self._get_anonymization_corpora(anonymizations)
-        dataframe = pd.DataFrame.from_dict(corpora)
-        #TODO: Load background_knowledge_file_path
-        #TODO: Add it to the dataframe
 
+        # Load background knowledge and add it to the corpora
+        with open(background_knowledge_file_path, "r", encoding="utf-8") as f:
+            bk_dict = json.load(f)        
+        for doc_id, bk in bk_dict.items():
+            doc_dict = corpora.get(doc_id, {})
+            doc_dict[BACKGROUND_KNOWLEDGE_KEY] = bk
+            corpora[doc_id] = doc_dict #TODO: Test with supersets
+
+        # Create dataframe from corpora
+        dataframe = pd.DataFrame.from_dict(list(corpora.values()))
+
+        # Create and run TRI
         tri = TRI(
             dataframe=dataframe,
-            background_knowledge_column=TEXT_KEY,#TODO: =BACKGROUND_KNOWLEDGE_KEY,
+            background_knowledge_column=BACKGROUND_KNOWLEDGE_KEY,
             output_folder_path=output_folder_path,
             individual_name_column=DOC_ID_KEY,
-            **kwargs)
-        
-        results = tri.run(verbose=verbose) #TODO: Check this verbose
-        results = {anon_name:values["eval_Accuracy"]/100 for anon_name, values in results.items()} # All in the 0 to 1 range
+            **kwargs)        
+        results = tri.run(verbose=verbose)
+
+        # Obtain TRIR
+        results = {anon_name:values["eval_Accuracy"] for anon_name, values in results.items()}
 
         return results
 
@@ -1375,21 +1387,24 @@ class TAE:
 
     #region Auxiliar
     
-    def _get_anonymization_corpora(self, anonymizations:Dict[str, List[MaskedDocument]]) -> List[Dict[str,str]]:
-        corpora = []
+    def _get_anonymization_corpora(self, anonymizations:Dict[str, List[MaskedDocument]],
+                                   include_original_text:bool=False) -> Dict[str,Dict[str,str]]:
+        corpora = {}
         
-        # Transform list of masked docs into dictionarys for faster processing
+        # Transform list of masked docs into dictionaries for faster processing
         anon_dicts = {}
         for anon_name, masked_docs in anonymizations.items():
             anon_dicts[anon_name] = {masked_doc.doc_id:masked_doc for masked_doc in masked_docs}
 
         # Create a dictionary per document
         for doc_id, doc in self.documents.items():
-            doc_dict = {DOC_ID_KEY:doc_id, TEXT_KEY:doc.text}
+            doc_dict = {DOC_ID_KEY:doc_id}
+            if include_original_text:
+                doc_dict[ORIGINAL_TEXT_KEY] = doc.text
             for anon_name, masked_docs_dict in anon_dicts.items():
                 masked_doc = masked_docs_dict[doc_id]
                 doc_dict[anon_name] = masked_doc.get_masked_text(doc.text)
-            corpora.append(doc_dict)
+            corpora[doc_id] = doc_dict
 
         return corpora
 
@@ -2544,7 +2559,7 @@ def get_TRI_accuracy(results):
         all_preds[idx] = torch.argmax(probs)
     
     correct_preds = torch.sum(all_preds == all_labels)
-    accuracy = (float(correct_preds)/num_preds)*100
+    accuracy = (float(correct_preds)/num_preds)
     return {"Accuracy": accuracy}
 
 #endregion

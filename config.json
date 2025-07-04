@@ -1,21 +1,50 @@
 {
-    "corpus_file_path": "data/TAB_test_Gold.json",
+    "corpus_file_path": "data/corpora/TAB_test_Gold.json",
     "anonymizations": {
-        "MvM":"data/TAB_test_gpt-3.5-turbo-0125_mvm-st.json",
-        "Manual_Entity":"data/TAB_test_Entity.json"
+        "St.NER3":"data/anonymizations/TAB_test_St.NER3.json",
+        "St.NER4":"data/anonymizations/TAB_test_St.NER4.json",
+        "St.NER7":"data/anonymizations/TAB_test_St.NER7.json",
+        "spaCy":"data/anonymizations/TAB_test_spaCy.json",
+        "Presidio_Supression_Ildikó":"data/anonymizations/TAB_test_Presidio_Supression_Ildikó.json",
+        "Presidio_Entity_Ildikó":"data/anonymizations/TAB_test_Presidio_Entity_Ildikó.json",
+        "Presidio_Entity":"data/anonymizations/TAB_test_Presidio_Entity.json",
+        "Presidio_Transformers_Entity":"data/anonymizations/TAB_test_Presidio_transformers_Entity.json",
+        "MvM-gpt-3.5-turbo":"data/anonymizations/TAB_test_gpt-3.5-turbo-0125_mvm-st.json",
+        "Manual_Supression":"data/anonymizations/TAB_test_Manual_Supression.json",
+        "Manual_Entity":"data/anonymizations/TAB_test_Manual_Entity.json",
+        "Manual_Presidio_GPT":"data/anonymizations/TAB_test_Manual_Presidio_gpt-3.5-turbo-0125.json",
+        "Manual_Dou":"data/anonymizations/TAB_test_Manual_Dou.json",
+        "Manual_INTACT":"data/anonymizations/TAB_test_Manual_INTACT.json"
     },
     "results_file_path": "results.csv",
     "metrics":{
-        "Precision":{},
-        "Precision_IC":{
+        "_Precision":{},
+        "_Precision_IC":{
             "token_weighting": "IC"
         },
-        "Recall": {},
-        "RecallPerEntity":{},
-        "TPI": {},
-        "TPS": {},
-        "NMI":{},
-        "TRIR":{
+        "_Recall": {},
+        "_RecallPerEntity":{},
+        "_TPI": {},
+        "_TPS": {},
+        "NMI_minilm":{
+            "embedding_model_name":"all-MiniLM-L6-v2",
+            "max_k":256
+        },
+        "NMI_mpnet":{
+            "embedding_model_name":"all-mpnet-base-v2",
+            "max_k":256
+        },
+        "NMI_bert":{
+            "embedding_model_name":"bert-base-cased",
+            "max_k":256
+        },
+        "_TRIR":{
+            "output_folder_path": "outputs/WikiActors/50_eval",
+            "background_knowledge_file_path": "data/bks/TAB_test_BK=Public.json",
+            "use_document_curation": true,
+            "anonymize_background_knowledge": true
+        },
+        "_TRIR_full":{
             "output_folder_path": "outputs/WikiActors/50_eval",
             "background_knowledge_file_path": "TO BE DEFINED",
             "load_saved_pretreatment": true,
