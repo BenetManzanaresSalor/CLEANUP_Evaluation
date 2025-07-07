@@ -668,7 +668,7 @@ class TAE:
             logging.info(f"########################### Computing {metric_name} metric ###########################")
             metric_key = metric_name.split("_")[0] # Text before first underscore is name of the metric, the rest is freely used
             partial_eval_func = self._get_partial_eval_func(metric_key, metric_parameters)
-            #TODO: If any error happens, notify and skip to the next metric
+            #TODO: If any error/exception happens, notify and skip to the next metric
 
             # If metric is invalid, results are None
             if partial_eval_func is None:
@@ -696,18 +696,18 @@ class TAE:
                             output = partial_eval_func(masked_docs)
                         
                         metric_results[anon_name] = output[0] if isinstance(output, tuple) else output  # If tuple, the first is metric's value
-                        #logging.info(f"{metric_name} for {anon_name}: {metric_results[anon_name]}") #TODO: Check if remove this
+                        #logging.info(f"{metric_name} for {anon_name}: {metric_results[anon_name]}") #TODO: Check if remove this or store the results after each metric
             
             # Save results
             results[metric_name] = metric_results
-            if not partial_eval_func is None: # TODO: Check if preserve this
+            if not partial_eval_func is None: # TODO: Check if preserve this if
                 if not results_file_path is None: #TODO: CSV is maybe a bad format for complex results such as those from recall_per_entity_type. Is JSON better instead? (worse for Excel)
                     self._write_into_results(results_file_path, [metric_name]+list(metric_results.values()))
             
             # Show results all together for easy comparison
             msg = f"Results for {metric_name}:"
             for name, value in results[metric_name].items():
-                msg += f"\n\t\t\t\t\t{name}: {value}" #TODO: Check this tabs
+                msg += f"\n\t\t\t\t\t{name}: {value}" #TODO: Check these tabs
             logging.info(msg)
         
         return results
@@ -772,7 +772,9 @@ class TAE:
 
 
     #region Precision
-            
+    
+    #TODO: Make a per-entity version
+    #TODO: Make easier to use the default weighting_model_name without knowing it
     def get_precision(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=None,
                       weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH,
                       token_level:bool=PRECISION_TOKEN_LEVEL) -> float:
@@ -862,8 +864,7 @@ class TAE:
             return nb_masked_elements / nb_elements
         except ZeroDivisionError:
             return 0
-
-    #TODO: There is no precision per entity type?
+    
     def get_recall_per_entity_type(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
                                    include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> dict:
         """Returns the mention or token-level recall of the masked spans when compared 
@@ -1375,7 +1376,7 @@ class TAE:
         for doc_id, bk in bk_dict.items():
             doc_dict = corpora.get(doc_id, {})
             doc_dict[BACKGROUND_KNOWLEDGE_KEY] = bk
-            corpora[doc_id] = doc_dict #TODO: Test with supersets
+            corpora[doc_id] = doc_dict #TODO: Test with BK that are supersets
 
         # Create dataframe from corpora
         dataframe = pd.DataFrame.from_dict(list(corpora.values()))
@@ -1440,7 +1441,7 @@ class TRI():
     mandatory_configs_names = ["output_folder_path", "dataframe",
         "individual_name_column", "background_knowledge_column"]
     output_folder_path = None
-    dataframe = None #TODO: Document this has been changed
+    dataframe = None #TODO: Note this has been changed
     individual_name_column = None
     background_knowledge_column = None
 
@@ -1733,14 +1734,8 @@ class TRI():
     #region ########## Data reading ##########
 
     def read_data(self) -> pd.DataFrame:
-        data_df = self.dataframe
-        """if self.data_file_path.endswith(".json"): # TODO: Check if definitely remove this
-            data_df = pd.read_json(self.data_file_path)
-        elif self.data_file_path.endswith(".csv"):
-            data_df = pd.read_csv(self.data_file_path)
-        else:
-            raise Exception(f"Unrecognized file extension for data file [{self.data_file_path}]. Compatible formats are JSON and CSV.")"""
-        
+        data_df = self.dataframe #TODO: Note this has been changed (removing load from data_file_path)
+
         # Check required columns exist
         if not self.individual_name_column in data_df.columns:
             raise Exception(f"Dataframe does not contain the individual name column {self.individual_name_column}")
@@ -2195,11 +2190,36 @@ class TRI():
                             train_dataset=train_dataset,
                             eval_dataset=eval_datasets_dict,
                             optimizers=[optimizer, scheduler],
-                            compute_metrics=get_TRI_accuracy,
+                            compute_metrics=self._get_TRI_accuracy,
                             data_collator=data_collator
                         )
         
         return trainer
+    
+    def _get_TRI_accuracy(self, results):
+        logits, labels = results
+
+        # Get predictions sum
+        logits = torch.from_numpy(logits)
+        logits_dict = {}
+        for logit, label in zip(logits, labels):
+            current_logits = logits_dict.get(label, torch.zeros_like(logit))
+            logits_dict[label] = current_logits.add_(logit)
+        
+        # Cumpute final predictions
+        num_preds = len(logits_dict)
+        all_preds = torch.zeros(num_preds, device="cpu")
+        all_labels = torch.zeros(num_preds, device="cpu")
+        for idx, item in enumerate(logits_dict.items()):
+            label, logits = item
+            all_labels[idx] = label
+            probs = F.softmax(logits, dim=-1)
+            all_preds[idx] = torch.argmax(probs)
+        
+        correct_preds = torch.sum(all_preds == all_labels)
+        accuracy = (float(correct_preds)/num_preds)
+        return {"Accuracy": accuracy}
+
 
     #endregion
 
@@ -2553,30 +2573,6 @@ class TRITrainer(Trainer):
         with open(self.results_file_path, "a+") as f:
             f.write(text)
 
-def get_TRI_accuracy(results):
-    logits, labels = results
-
-    # Get predictions sum
-    logits = torch.from_numpy(logits)
-    logits_dict = {}
-    for logit, label in zip(logits, labels):
-        current_logits = logits_dict.get(label, torch.zeros_like(logit))
-        logits_dict[label] = current_logits.add_(logit)
-    
-    # Cumpute final predictions
-    num_preds = len(logits_dict)
-    all_preds = torch.zeros(num_preds, device="cpu")
-    all_labels = torch.zeros(num_preds, device="cpu")
-    for idx, item in enumerate(logits_dict.items()):
-        label, logits = item
-        all_labels[idx] = label
-        probs = F.softmax(logits, dim=-1)
-        all_preds[idx] = torch.argmax(probs)
-    
-    correct_preds = torch.sum(all_preds == all_labels)
-    accuracy = (float(correct_preds)/num_preds)
-    return {"Accuracy": accuracy}
-
 #endregion
 
 #endregion
@@ -2592,9 +2588,9 @@ if __name__ == "__main__":
     #region Additional configurations for running standalone
 
     logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s', level=logging.INFO) # Configure logging
-    logging.getLogger('sentence_transformers').setLevel(logging.WARNING) # Suppress INFO logs from sentence_transformers
-    logging.getLogger('transformers').setLevel(logging.WARNING)  # Suppress INFO logs from transformers
-    logging.getLogger('torch').setLevel(logging.WARNING)         # Suppress INFO logs from torch
+    logging.getLogger('sentence_transformers').setLevel(logging.WARNING)    # Suppress INFO logs from sentence_transformers
+    logging.getLogger('transformers').setLevel(logging.WARNING)             # Suppress INFO logs from transformers
+    logging.getLogger('torch').setLevel(logging.WARNING)                    # Suppress INFO logs from torch
 
     #endregion
 
@@ -2602,7 +2598,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Computes evaluation metrics for text anonymization')
     parser.add_argument('config_file_path', type=str,
-                        help='the path to the JSON file containing the configuration for the evaluation')
+                        help='the path to the JSON file containing the evaluation configuration')
     args = parser.parse_args()
 
     # Load configuration dictionary
@@ -2611,14 +2607,14 @@ if __name__ == "__main__":
     
     for key in MANDATORY_CONFIG_KEYS:
         if not key in config.keys():
-            raise RuntimeError(f"Configuration JSON file misses mandatory key {key}")
+            raise RuntimeError(f"Configuration JSON file misses mandatory key: {key}")
     
     #endregion
 
 
     #region Initialization
 
-    logging.info(f"Device for models: {DEVICE}")
+    logging.info(f"Device for models: {DEVICE}") #TODO: Check this print
 
     # Create TAE from corpus
     corpus_file_path = config[CORPUS_CONFIG_KEY]
@@ -2645,6 +2641,5 @@ if __name__ == "__main__":
     tae.evaluate(anonymizations, metrics, results_file_path)
 
     #endregion
-
 
 #endregion
