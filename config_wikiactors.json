@@ -1,0 +1,40 @@
+{
+    "corpus_file_path": "data/wikiactors/corpora/WikiActors_Corpus.json",
+    "anonymizations": {
+        "St.NER3":"data/wikiactors/anonymizations/WikiActors_NER3.json",
+        "St.NER4":"data/wikiactors/anonymizations/WikiActors_NER4.json",
+        "St.NER7":"data/wikiactors/anonymizations/WikiActors_NER7.json",
+        "spaCy":"data/wikiactors/anonymizations/WikiActors_spaCy.json",
+        "Presidio":"data/wikiactors/anonymizations/WikiActors_Presidio.json",
+        "Word2Vec_t=0.25":"data/wikiactors/anonymizations/WikiActors_Word2Vec_t=0.5.json",
+        "Word2Vec_t=0.5":"data/wikiactors/anonymizations/WikiActors_Word2Vec_t=0.25.json",
+        "Manual":"data/wikiactors/anonymizations/WikiActors_Manual.json",
+        "Manual_old":"data/wikiactors/anonymizations/WikiActors_Manual_old.json"
+    },
+    "results_file_path": "results_wikiactors.csv",
+    "metrics":{
+        "Precision":{},
+        "_Precision_IC":{
+            "weighting_model_name": "google-bert/bert-base-uncased"
+        },
+        "Recall": {},
+        "_RecallPerEntity":{},
+        "TPI": {},
+        "_TPS": {},
+        "_NMI_minilm":{
+            "embedding_model_name":"all-MiniLM-L6-v2"
+        },
+        "_NMI_mpnet":{
+            "embedding_model_name":"all-mpnet-base-v2"
+        },
+        "NMI_bert":{
+            "embedding_model_name":"bert-base-cased"
+        },
+        "TRIR":{
+            "output_folder_path": "outputs/WikiActors/50_eval",
+            "background_knowledge_file_path": "data/wikiactors/bks/WikiActors_50_eval_BK=Public.json",
+            "use_document_curation": true,
+            "anonymize_background_knowledge": true
+        }
+    }   
+}

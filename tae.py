@@ -135,7 +135,7 @@ NMI_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2" # Options: "all-MiniLM-L6-v2", "al
 NMI_MIN_K = 2
 NMI_MAX_K = 32
 NMI_K_MULTIPLIER = 2
-NMI_REMOVE_MASK_MARKS = False
+NMI_REMOVE_MASK_MARKS = True
 NMI_N_CLUSTERINGS = 5
 NMI_N_TRIES_PER_CLUSTERING = 50
 
@@ -1379,7 +1379,8 @@ class TAE:
             corpora[doc_id] = doc_dict #TODO: Test with BK that are supersets
 
         # Create dataframe from corpora
-        dataframe = pd.DataFrame.from_dict(list(corpora.values()))
+        dataframe = pd.DataFrame.from_dict(list(corpora.values())) #TODO: Why results change when compared with original TRI?
+        #dataframe.to_json("dataframe.json", orient="records") #TODO: Remove this
 
         # Create and run TRI
         tri = TRI(
@@ -2239,8 +2240,8 @@ class TRI():
         # Show results
         if verbose:
             for anon_name, res in self.trir_results.items():
-                #res_key = list(filter(lambda x:x.endswith("_Accuracy"), res.keys()))[0]
-                logging.info(f"TRIR for {anon_name} = {res['eval_Accuracy']}%")
+                #res_key = list(filter(lambda x:x.endswith("_Accuracy"), res.keys()))[0] #TODO: Check this
+                logging.info(f"TRIR for {anon_name} = {res['eval_Accuracy']:%}")
         
         if verbose: logging.info("######### END: PREDICT TRIR #########")
         
