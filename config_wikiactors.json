@@ -11,7 +11,7 @@
         "Manual":"data/wikiactors/anonymizations/WikiActors_Manual.json",
         "Manual_old":"data/wikiactors/anonymizations/WikiActors_Manual_old.json"
     },
-    "results_file_path": "results_wikiactors.csv",
+    "results_file_path": "outputs/results_wikiactors.csv",
     "metrics":{
         "Precision":{},
         "_Precision_IC":{

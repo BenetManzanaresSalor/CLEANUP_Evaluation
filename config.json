@@ -1,43 +1,41 @@
 {
-    "corpus_file_path": "data/corpora/TAB_test_Gold.json",
+    "corpus_file_path": "data/tab/corpora/TAB_test_Corpus.json",
     "anonymizations": {
-        "St.NER3":"data/anonymizations/TAB_test_St.NER3.json",
-        "St.NER4":"data/anonymizations/TAB_test_St.NER4.json",
-        "St.NER7":"data/anonymizations/TAB_test_St.NER7.json",
-        "spaCy":"data/anonymizations/TAB_test_spaCy.json",
-        "Presidio_Supression_Ildikó":"data/anonymizations/TAB_test_Presidio_Supression_Ildikó.json",
-        "Presidio_Entity_Ildikó":"data/anonymizations/TAB_test_Presidio_Entity_Ildikó.json",
-        "Presidio_Entity":"data/anonymizations/TAB_test_Presidio_Entity.json",
-        "Presidio_Transformers_Entity":"data/anonymizations/TAB_test_Presidio_transformers_Entity.json",
-        "MvM-gpt-3.5-turbo":"data/anonymizations/TAB_test_gpt-3.5-turbo-0125_mvm-st.json",
-        "Manual_Supression":"data/anonymizations/TAB_test_Manual_Supression.json",
-        "Manual_Entity":"data/anonymizations/TAB_test_Manual_Entity.json",
-        "Manual_Presidio_GPT":"data/anonymizations/TAB_test_Manual_Presidio_gpt-3.5-turbo-0125.json",
-        "Manual_Dou":"data/anonymizations/TAB_test_Manual_Dou.json",
-        "Manual_INTACT":"data/anonymizations/TAB_test_Manual_INTACT.json"
+        "St.NER3":"data/tab/anonymizations/TAB_test_St.NER3.json",
+        "St.NER4":"data/tab/anonymizations/TAB_test_St.NER4.json",
+        "St.NER7":"data/tab/anonymizations/TAB_test_St.NER7.json",
+        "spaCy":"data/tab/anonymizations/TAB_test_spaCy.json",
+        "Presidio_Supression_Ildikó":"data/tab/anonymizations/TAB_test_Presidio_Supression_Ildikó.json",
+        "Presidio_Entity_Ildikó":"data/tab/anonymizations/TAB_test_Presidio_Entity_Ildikó.json",
+        "Presidio_Entity":"data/tab/anonymizations/TAB_test_Presidio_Entity.json",
+        "Presidio_Transformers_Entity":"data/tab/anonymizations/TAB_test_Presidio_transformers_Entity.json",
+        "MvM-gpt-3.5-turbo":"data/tab/anonymizations/TAB_test_gpt-3.5-turbo-0125_mvm-st.json",
+        "Manual_Supression":"data/tab/anonymizations/TAB_test_Manual_Supression.json",
+        "Manual_Entity":"data/tab/anonymizations/TAB_test_Manual_Entity.json",
+        "Manual_Presidio_GPT":"data/tab/anonymizations/TAB_test_Manual_Presidio_gpt-3.5-turbo-0125.json",
+        "Manual_Dou":"data/tab/anonymizations/TAB_test_Manual_Dou.json",
+        "Manual_INTACT":"data/tab/anonymizations/TAB_test_Manual_INTACT.json"
     },
-    "results_file_path": "results.csv",
+    "results_file_path": "outputs/results.csv",
     "metrics":{
         "Precision":{},
-        "Precision_IC":{
-            "weighting_model_name": "google-bert/bert-base-uncased"
-        },
-        "_Recall": {},
+        "_WeightedPrecision":{},
+        "Recall": {},
         "_RecallPerEntity":{},
-        "TPI": {},
-        "TPS": {},
-        "_NMI_minilm":{
+        "_TPI": {},
+        "_TPS": {},
+        "NMI_minilm":{
             "embedding_model_name":"all-MiniLM-L6-v2"
         },
-        "_NMI_mpnet":{
+        "NMI_mpnet":{
             "embedding_model_name":"all-mpnet-base-v2"
         },
-        "_NMI_bert":{
+        "NMI_bert":{
             "embedding_model_name":"bert-base-cased"
         },
         "_TRIR":{
             "output_folder_path": "outputs/WikiActors/50_eval",
-            "background_knowledge_file_path": "data/bks/TAB_test_BK=Public.json",
+            "background_knowledge_file_path": "data/tab/bks/TAB_test_BK=Public.json",
             "use_document_curation": true,
             "anonymize_background_knowledge": true
         },
