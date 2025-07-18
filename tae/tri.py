@@ -28,7 +28,7 @@ import logging
 #endregion
 
 
-#region TRI class
+#region TRI
 
 class TRI():
     #region ################### Properties ###################

@@ -2,7 +2,7 @@
 
 import json, re, abc, logging, math, os, csv, gc
 os.environ["OMP_NUM_THREADS"] = "1" # Done before loading MKL to avoid: \sklearn\cluster\_kmeans.py:1382: UserWarning: KMeans is known to have a memory leak on Windows with MKL, when there are less chunks than available threads. You can avoid it by setting the environment variable OMP_NUM_THREADS=1
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Set, Iterator, Union
 from datetime import datetime
 from dataclasses import dataclass
 from functools import partial
@@ -25,10 +25,10 @@ from .tri import TRI
 #endregion
 
 
-#region Constants
+#region Constants/Settings
 
 
-#region Input settings
+#region Input
 
 # Configuration dictionary keys
 CORPUS_CONFIG_KEY = "corpus_file_path" #TODO: Perhaps also accept a HuggingFace's dataset
@@ -70,14 +70,14 @@ METRICS_REQUIRING_GOLD_ANNOTATIONS = [PRECISION_METRIC_NAME, WEIGHTED_PRECISION_
 #endregion
 
 
-#region General settings
+#region General
 
 SPACY_MODEL_NAME = "en_core_web_md"
 IC_WEIGHTING_MODEL_NAME = "google-bert/bert-base-uncased" #TODO: Update this and all other models
 IC_WEIGHTING_MAX_SEGMENT_LENGTH = 100
 BACKGROUND_KNOWLEDGE_KEY = "background_knowledge" # For TRIR background knowledge file
 
-# POS tags, tokens or characters that can be ignored from the recall scores 
+# POS tags, tokens or characters that can be ignored scores 
 # (because they do not carry much semantic content, and there are discrepancies
 # on whether to include them in the annotated spans or not)
 POS_TO_IGNORE = {"ADP", "PART", "CCONJ", "DET"} 
@@ -101,7 +101,7 @@ else:
 #endregion
 
 
-#region Metric-specific settings
+#region Metric-specific
 
 # Precision default settings
 PRECISION_TOKEN_LEVEL=True
@@ -121,7 +121,7 @@ TPS_USE_CHUNKING = True
 TPS_SIMILARITY_MODEL_NAME = "paraphrase-albert-base-v2" # From the Sentence-Transformers library
 
 # NMI default settings
-NMI_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2" # Options: "all-MiniLM-L6-v2", "all-mpnet-base-v2" others from https://www.sbert.net/docs/sentence_transformer/pretrained_models.html or classic models such as "bert-base-cased"
+NMI_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2" #TODO: Options: "all-MiniLM-L6-v2", "all-mpnet-base-v2" others from https://www.sbert.net/docs/sentence_transformer/pretrained_models.html or classic models such as "bert-base-cased"
 NMI_MIN_K = 2
 NMI_MAX_K = 32
 NMI_K_MULTIPLIER = 2
@@ -137,15 +137,14 @@ NMI_N_TRIES_PER_CLUSTERING = 50
 #endregion
 
 
-#region Classes and functions
-
-
 #region Utils
 
 @dataclass
 class MaskedDocument:
     """Represents a document in which some text spans are masked, each span
-    being expressed by their (start, end) character boundaries"""
+    being expressed by their (start, end) character boundaries.
+    Optionally, spans can also have replacement strings.
+    """
 
     doc_id: str
     masked_spans : List[Tuple[int, int]]
@@ -159,6 +158,14 @@ class MaskedDocument:
         return self.masked_offsets
     
     def get_masked_text(self, original_text:str) -> str:
+        """Applies masking to the original text based on masked spans and replacements.
+
+        Args:
+            original_text (str): The text to be masked.
+        
+        Returns:
+            str: The masked text.
+        """
         masked_text = ""+original_text
         
         for (start_idx, end_idx), replacement in zip(reversed(self.masked_spans), reversed(self.replacements)):
@@ -170,9 +177,15 @@ class MaskedDocument:
 
 @dataclass
 class MaskedCorpus(List[MaskedDocument]):
+    """Auxiliar class that inherits from List[MaskedDocument] for the loading of a MaskedDocument list from file"""
+
     def __init__(self, masked_docs_file_path:str):
-        """Given a file path for a JSON file containing the spans to be masked for
-        each document, builds a list of MaskedDocument objects"""
+        """
+        Initializes the `MaskedCorpus` object from a JSON file.
+
+        Args:
+            masked_docs_file_path (str): Path to a JSON file with masked spans (and replacements, optionally)
+        """
 
         masked_docs_list = []
         
@@ -217,11 +230,13 @@ class AnnotatedEntity:
     mention_level_masking: List[bool]
 
     def __post_init__(self):
+        """Checks that direct identifiers are masked"""
         if self.is_direct and not self.need_masking:
             raise RuntimeError(f"Annotated entity {self.entity_id} is a direct identifier but it is not always masked")
 
     @property
     def mentions_to_mask(self) -> list:
+        """List of mentions to mask based on the mention level masking"""
         return [mention for i, mention in enumerate(self.mentions)
                 if self.mention_level_masking[i]]
 
@@ -237,8 +252,15 @@ class Document:
     
     def __init__(self, doc_id:str, text:str, spacy_doc:Optional[spacy.tokens.Doc],
                  gold_annotations:Optional[Dict[str,List]]=None):
-        """Creates a new annotated document with an identifier, a text content, and 
-        (optionally) a set of gold annotations"""
+        """
+        Initializes a new 'Document', optionally including gold annotations.
+
+        Args:
+            doc_id (str): The unique document identifier.
+            text (str): The text content of the document.
+            spacy_doc (Optional[spacy.tokens.Doc]): The spaCy document object.
+            gold_annotations (Optional[Dict[str, List]]): Gold annotations, if available.
+        """
         
         # The (unique) document identifier, its text and the spacy document
         self.doc_id = doc_id
@@ -257,7 +279,17 @@ class Document:
                     self.gold_annotated_entities[entity.entity_id] = entity
     
     def _get_entities_from_mentions(self, entity_mentions:List[dict]) -> List[AnnotatedEntity]:
-        """Returns a set of entities based on the annotated mentions"""
+        """
+        Processes a list of entity mentions and returns a list of unique AnnotatedEntity objects.
+
+        Args:
+            entity_mentions (List[dict]): A list of dictionaries, where each dictionary represents an entity mention.
+                Each mention dictionary must contain 'entity_id', 'identifier_type', 'start_offset', and 'end_offset' keys.
+
+        Returns:
+            List[AnnotatedEntity]: A list of AnnotatedEntity objects, where each object represents a unique entity
+            found in the input mentions, consolidating all its mentions.
+        """
         entities = {}
 
         for mention in entity_mentions:                
@@ -303,8 +335,17 @@ class Document:
     #region Functions
 
     def is_masked(self, masked_doc:MaskedDocument, entity:AnnotatedEntity) -> bool:
-        """Given a document with a set of masked text spans, determines whether entity
-        is fully masked (which means that all its mentions are masked)"""
+        """
+        Given a document with a set of masked text spans, determines whether entity
+        is fully masked (which means that all its mentions are masked).
+
+        Args:
+            masked_doc (MaskedDocument): The document with masked text spans.
+            entity (AnnotatedEntity): The entity to check for masking.
+
+        Returns:
+            bool: True if the entity is fully masked, False otherwise.
+        """
         
         for incr, (mention_start, mention_end) in enumerate(entity.mentions):
             
@@ -315,12 +356,23 @@ class Document:
             # so we verify that the mention does need masking
             elif entity.mention_level_masking[incr]:
                 return False
+        
         return True
     
     def is_mention_masked(self, masked_doc:MaskedDocument, mention_start:int, mention_end:int) -> bool:
-        """Given a document with a set of masked text spans and a particular mention span,
+        """
+        Given a document with a set of masked text spans and a particular mention span,
         determine whether the mention is fully masked (taking into account special
-        characters or PoS/tokens to ignore)"""
+        characters or PoS/tokens to ignore).
+
+        Args:
+            masked_doc (MaskedDocument): The document with masked text spans.
+            mention_start (int): The starting character offset of the mention.
+            mention_end (int): The ending character offset of the mention.
+
+        Returns:
+            bool: True if the mention is fully masked, False otherwise.
+        """
                 
         # Computes the character offsets that must be masked
         offsets_to_mask = set(range(mention_start, mention_end))
@@ -342,9 +394,16 @@ class Document:
         # If that set is empty, we consider the mention as properly masked
         return len(non_covered_offsets) == 0
 
-    def get_entities_to_mask(self, include_direct:bool=True, include_quasi:bool=True) -> list:
-        """Return entities that should be masked, and satisfy the constraints 
-        specified as arguments"""
+    def get_entities_to_mask(self, include_direct:bool=True, include_quasi:bool=True) -> List[AnnotatedEntity]:
+        """Return entities that should be masked and satisfy the constraints specified as arguments.
+
+        Args:
+            include_direct (bool): Whether to include direct entities. Defaults to True.
+            include_quasi (bool): Whether to include quasi entities. Defaults to True.
+
+        Returns:
+            List[AnnotatedEntity]: A list of entities that should be masked.
+        """
         
         to_mask = []
         for entity in self.gold_annotated_entities.values():
@@ -359,10 +418,17 @@ class Document:
                 
         return to_mask      
         
-    def get_annotators_for_span(self, start_token:int, end_token:int) -> set:
-        """Given a text span (typically for a token), determines which annotators 
-        have also decided to mask it. Concretely, the method returns a (possibly
-        empty) set of annotators names that have masked that span."""        
+    def get_annotators_for_span(self, start_token:int, end_token:int) -> Set[str]:
+        """Given a text span (typically for a token), determines which annotators
+        have also decided to mask it.
+
+        Args:
+            start_token (int): The starting token index of the span.
+            end_token (int): The ending token index of the span.
+
+        Returns:
+            Set[str]: A (possibly empty) set of annotator names that have masked that span.
+        """
         
         # We compute an interval tree for fast retrieval
         if not hasattr(self, "masked_spans"):
@@ -374,17 +440,24 @@ class Document:
                             self.masked_spans[start:end] = entity.annotator
         
         annotators = set()      
-        for mention_start, mention_end, annotator in self.masked_spans[start_token:end_token]:
-            
+        for mention_start, mention_end, annotator in self.masked_spans[start_token:end_token]:            
             # We require that the span is fully covered by the annotator
             if mention_start <=start_token and mention_end >= end_token:
                 annotators.add(annotator)
                     
         return annotators
 
-    def split_by_tokens(self, start:int, end:int):
-        """Generates the (start, end) boundaries of each token included in this span"""
-        
+    def split_by_tokens(self, start:int, end:int) -> Iterator[Tuple[int, int]]:
+        """
+        Generates the (start, end) boundaries of each token included in this span.
+
+        Args:
+            start (int): The starting index of the span.
+            end (int): The ending index of the span.
+
+        Returns:
+            Iterator[Tuple[int, int]]: An iterator of (start, end) tuples for each token.
+        """        
         for match in re.finditer(r"\w+", self.text[start:end]):
             start_token = start + match.start(0)
             end_token = start + match.end(0)
@@ -393,33 +466,34 @@ class Document:
     #endregion
 
 class TokenWeighting:
-    """Abstract class for token weighting schemes"""
+    """Abstract class for token weighting schemes (i.e., 'ICTokenWeighting' and 'UniformTokenWeighting')"""
 
     @abc.abstractmethod
     def get_weights(self, text:str, text_spans:List[Tuple[int,int]]) -> np.ndarray:
         """Given a text and a list of text spans, returns a NumPy array of numeric weights
-        (of same length as the list of spans) representing the information content
-        conveyed by each span.
+        (of same length as the list of spans) corresponding to each span.
 
-        A weight close to 0 represents a span with low information content (i.e. which
-        can be easily predicted from the remaining context), while a higher weight 
-        represents a high information content (which is difficult to predict from the
-        context)"""
+        Args:
+            text (str): The input text.
+            text_spans (List[Tuple[int,int]]): A list of text spans, where each span
+                is represented as a tuple of (start_index, end_index).
+
+        Returns:
+            np.ndarray: A NumPy array of numeric weights, with the same length as
+            `text_spans`.
+        """
 
         return
-    
-    def __del__(self):
-        pass
 
 class ICTokenWeighting(TokenWeighting):
-    """Token weighting based on a BERT language model. The weighting mechanism
-    runs the BERT model on a text in which the provided spans are masked. The
-    weight of each token is then defined as its information content:
-    -log(probability of the actual token value).
+    """Token weighting based on a BERT language model. 
+    The weighting mechanism runs the model on a text in which the provided spans are masked. 
+    The weight of each token is then defined as its information content:
+    -log(probability of the actual token value)
     
     In other words, a token that is difficult to predict will have a high
     information content, and therefore a high weight, whereas a token which can
-    be predicted from its content will received a low weight."""
+    be predicted from its content will received a low weight (closer to zero)"""
 
     max_segment_length:int
     model_name:str
@@ -428,25 +502,43 @@ class ICTokenWeighting(TokenWeighting):
     model=None
     tokenizer=None
     
-    def __init__(self, max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH,
-                 model_name:str=IC_WEIGHTING_MODEL_NAME, device:str=DEVICE):
-        """Initialises the BERT tokenizers and masked language model"""
+    def __init__(self, model_name:str, device:str, max_segment_length:int):
+        """Initializes the 'ICTokenWeighting'
+
+        Args:
+            model_name (str): The name of the BERT model to use (e.g., 'bert-base-uncased').
+            device (str): The device to run the model on (e.g., 'cpu' or 'cuda').
+            max_segment_length (int): The maximum sequence length for the model.
+        """
         self.max_segment_length = max_segment_length
         self.model_name = model_name
         self.device = device
     
     # TODO: Implement a batched version
     def get_weights(self, text:str, text_spans:List[Tuple[int,int]]) -> np.ndarray:
-        """Returns a list of numeric information content weights, where each value
+        """Returns an array of numeric information content weights, where each value
         corresponds to -log(probability of predicting the value of the text span
         according to the BERT model).
-        
-        If the span corresponds to several BERT tokens, the probability is the 
-        mininum of the probabilities for each token."""
+
+        If the span corresponds to several BERT tokens, the probability is the
+        minimum of the probabilities for each token.
+
+        Args:
+            text (str): The input text.
+            text_spans (List[Tuple[int,int]]): A list of text spans, where each span
+                is represented as a tuple of (start_index, end_index).
+
+        Returns:
+            np.ndarray: A NumPy array of numeric weights, with the same length as
+            `text_spans`. A weight close to 0 represents a span with low information
+            content (i.e. which can be easily predicted from the remaining context),
+            while a higher weight represents a high information content (which is
+            difficult to predict from the context).
+        """
 
         # STEP 0: Create model if it is not already created
         if self.model is None:
-            self.create_model()
+            self._create_model()
         
         # STEP 1: we tokenise the text
         bert_tokens = self.tokenizer(text, return_offsets_mapping=True)
@@ -493,15 +585,33 @@ class ICTokenWeighting(TokenWeighting):
         
         return weights
 
-    def create_model(self):
+    def _create_model(self):
+        """
+        Initializes the BERT model and tokenizer from the pre-trained model name.
+        Only executed the first time the get_weights method is invoked.
+        """
         self.model = AutoModelForMaskedLM.from_pretrained(self.model_name, trust_remote_code=True)
         self.model = self.model.to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
-    def _get_tokens_by_span(self, bert_token_spans, text_spans, text:str):
+    def _get_tokens_by_span(self, bert_token_spans:List[Tuple[int,int]],
+                            text_spans:List[Tuple[int,int]], text:str) -> Dict[Tuple[int,int],List[int]]:
         """Given two lists of spans (one with the spans of the BERT tokens, and one with
         the text spans to weight), returns a dictionary where each text span is associated
-        with the indices of the BERT tokens it corresponds to."""            
+        with the indices of the BERT tokens it corresponds to.
+
+        Args:
+            bert_token_spans (List[Tuple[int,int]]): A list of tuples, where each tuple
+                represents the (start_index, end_index) of a BERT token within the text.
+            text_spans (List[Tuple[int,int]]): A list of tuples, where each tuple
+                represents the (start_index, end_index) of a text span to be weighted.
+            text (str): The original text.
+
+        Returns:
+            Dict[Tuple[int,int],List[int]]: A dictionary where keys are text spans
+            (tuples of start and end indices) and values are lists of BERT token indices
+            that fall within the respective text span.
+        """
         
         # We create an interval tree to facilitate the mapping
         text_spans_tree = intervaltree.IntervalTree()
@@ -521,13 +631,23 @@ class ICTokenWeighting(TokenWeighting):
         
         return tokens_by_span
     
-    def _get_model_predictions(self, input_ids, attention_mask):
+    def _get_model_predictions(self, input_ids:Union[List[int], torch.Tensor],
+                                attention_mask:Union[List[int], torch.Tensor]) -> torch.Tensor:
         """Given tokenised input identifiers and an associated attention mask (where the
         tokens to predict have a mask value set to 0), runs the BERT language and returns
         the (unnormalised) prediction scores for each token.
-        
-        If the input length is longer than max_segment size, we split the document in
-        small segments, and then concatenate the model predictions for each segment."""
+
+        If the input length is longer than max_segment_length, we split the document in
+        small segments, and then concatenate the model predictions for each segment.
+
+        Args:
+            input_ids (Union[List[int], torch.Tensor]): The input token IDs.
+            attention_mask (Union[List[int], torch.Tensor]): The attention mask, where
+                0 indicates tokens to be predicted.
+
+        Returns:
+            torch.Tensor: The (unnormalised) prediction scores for each token.
+        """
         
         nb_tokens = len(input_ids)
         
@@ -564,7 +684,8 @@ class ICTokenWeighting(TokenWeighting):
         return scores     
 
     def __del__(self):
-        # Dispose model and tokenizer (if defined)
+        """Method invoked when deleting the instance to dispose the model and the tokenizer
+        (if these are already defined)"""
         if not self.model is None:
             del self.model
         if not self.tokenizer is None:
@@ -577,6 +698,17 @@ class ICTokenWeighting(TokenWeighting):
 class UniformTokenWeighting(TokenWeighting):
     """Uniform weighting (all tokens assigned to a weight of 1.0)"""
     def get_weights(self, text:str, text_spans:List[Tuple[int,int]]) -> np.ndarray:
+        """Given a text and a list of text spans, returns a NumPy array of uniform weights.
+
+        Args:
+            text (str): The input text.
+            text_spans (List[Tuple[int,int]]): A list of text spans, where each span
+                is represented as a tuple of (start_index, end_index).
+
+        Returns:
+            np.ndarray: A NumPy array with all weights set to 1.0, with the same length
+                as `text_spans`.
+        """
         return np.ones(len(text_spans))
 
 #endregion
@@ -641,12 +773,12 @@ class TAE:
                               TRIR_METRIC_NAME:self.get_TRIR}
 
     @classmethod
-    def from_file_path(cls, corpus_file_path:str):
+    def from_file_path(cls, corpus_file_path:str, spacy_model_name:str=SPACY_MODEL_NAME):
         with open(corpus_file_path, encoding="utf-8") as f:
             corpus = json.load(f)
         if type(corpus)!=list:
             raise RuntimeError("Corpus JSON file must be a list of documents")
-        return TAE(corpus)
+        return TAE(corpus, spacy_model_name=spacy_model_name)
 
     #endregion
 
@@ -780,7 +912,7 @@ class TAE:
             token_weighting = UniformTokenWeighting()
         
         else:
-            token_weighting = ICTokenWeighting(model_name=weighting_model_name,
+            token_weighting = ICTokenWeighting(model_name=weighting_model_name, device=DEVICE,
                                                max_segment_length=weighting_max_segment_length)
                 
         for doc in masked_docs:
@@ -921,7 +1053,7 @@ class TAE:
         if weighting_model_name is None:
             token_weighting = UniformTokenWeighting()        
         else:
-            token_weighting = ICTokenWeighting(model_name=weighting_model_name,
+            token_weighting = ICTokenWeighting(model_name=weighting_model_name, device=DEVICE,
                                                max_segment_length=weighting_max_segment_length)
 
         # For each masked document
@@ -979,7 +1111,7 @@ class TAE:
             token_weighting = UniformTokenWeighting()
         
         else:
-            token_weighting = ICTokenWeighting(model_name=weighting_model_name,
+            token_weighting = ICTokenWeighting(model_name=weighting_model_name, device=DEVICE,
                                                max_segment_length=weighting_max_segment_length)
         
         # Load embedding model and function for similarity
@@ -1417,8 +1549,5 @@ class TAE:
         return corpora
 
     #endregion
-
-#endregion
-
 
 #endregion
