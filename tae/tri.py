@@ -28,7 +28,7 @@ import logging
 #endregion
 
 
-#region TRI
+#region Code
 
 class TRI():
     #region ################### Properties ###################
@@ -845,11 +845,6 @@ class TRI():
 
     #endregion
 
-#endregion
-
-
-#region TRI dataset
-
 class TRIDataset(Dataset):
     def __init__(self, df, tokenizer, name_to_label, return_labels, sliding_window_config, tokenization_block_size):
         # Dataframe must have two columns: name and text
@@ -1083,11 +1078,6 @@ class TRIDataset(Dataset):
             input["labels"] = label
         
         return input
-
-#endregion
-
-
-#region TRI trainer
 
 class TRITrainer(Trainer):
     def __init__(self, results_file_path:str = None, **kwargs):
