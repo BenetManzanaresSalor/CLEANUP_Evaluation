@@ -25,7 +25,7 @@ from .tri import TRI
 #endregion
 
 
-#region Constants/Settings
+#region Constants/Settings #TODO: Move (some) of these constants to the TAE class?
 
 
 #region Input
@@ -152,6 +152,7 @@ class MaskedDocument:
 
     def get_masked_offsets(self) -> set:
         """Returns the character offsets/indices that are masked"""
+
         if not hasattr(self, "masked_offsets"):
             self.masked_offsets = {i for start, end in self.masked_spans
                                    for i in range(start, end)}
@@ -166,6 +167,7 @@ class MaskedDocument:
         Returns:
             str: The masked text.
         """
+
         masked_text = ""+original_text
         
         for (start_idx, end_idx), replacement in zip(reversed(self.masked_spans), reversed(self.replacements)):
@@ -231,17 +233,20 @@ class AnnotatedEntity:
 
     def __post_init__(self):
         """Checks that direct identifiers are masked"""
+
         if self.is_direct and not self.need_masking:
             raise RuntimeError(f"Annotated entity {self.entity_id} is a direct identifier but it is not always masked")
 
     @property
     def mentions_to_mask(self) -> list:
         """List of mentions to mask based on the mention level masking"""
+
         return [mention for i, mention in enumerate(self.mentions)
                 if self.mention_level_masking[i]]
 
 class Document:
-    """Representation of a document, optionally including gold annotations"""
+    """Representation of a document, with an identifier and textual content. 
+    Ooptionally, it can include its spaCy document object and/or gold annotations"""
 
     doc_id:str
     text:str
@@ -250,18 +255,19 @@ class Document:
 
     #region Initialization
     
-    def __init__(self, doc_id:str, text:str, spacy_doc:Optional[spacy.tokens.Doc],
+    def __init__(self, doc_id:str, text:str, spacy_doc:Optional[spacy.tokens.Doc]=None,
                  gold_annotations:Optional[Dict[str,List]]=None):
         """
-        Initializes a new 'Document', optionally including gold annotations.
+        Initializes a new `Document`, optionally including gold annotations.
 
         Args:
             doc_id (str): The unique document identifier.
             text (str): The text content of the document.
             spacy_doc (Optional[spacy.tokens.Doc]): The spaCy document object.
             gold_annotations (Optional[Dict[str, List]]): Gold annotations, if available.
+                Check the `README.md` for more information.
         """
-        
+
         # The (unique) document identifier, its text and the spacy document
         self.doc_id = doc_id
         self.text = text
@@ -284,12 +290,13 @@ class Document:
 
         Args:
             entity_mentions (List[dict]): A list of dictionaries, where each dictionary represents an entity mention.
-                Each mention dictionary must contain 'entity_id', 'identifier_type', 'start_offset', and 'end_offset' keys.
+                Each mention dictionary must contain `entity_id`, `identifier_type`, `start_offset`, and `end_offset` keys.
 
         Returns:
             List[AnnotatedEntity]: A list of AnnotatedEntity objects, where each object represents a unique entity
             found in the input mentions, consolidating all its mentions.
         """
+
         entities = {}
 
         for mention in entity_mentions:                
@@ -346,7 +353,7 @@ class Document:
         Returns:
             bool: True if the entity is fully masked, False otherwise.
         """
-        
+
         for incr, (mention_start, mention_end) in enumerate(entity.mentions):
             
             if self.is_mention_masked(masked_doc, mention_start, mention_end):
@@ -373,7 +380,7 @@ class Document:
         Returns:
             bool: True if the mention is fully masked, False otherwise.
         """
-                
+
         # Computes the character offsets that must be masked
         offsets_to_mask = set(range(mention_start, mention_end))
 
@@ -457,7 +464,8 @@ class Document:
 
         Returns:
             Iterator[Tuple[int, int]]: An iterator of (start, end) tuples for each token.
-        """        
+        """    
+
         for match in re.finditer(r"\w+", self.text[start:end]):
             start_token = start + match.start(0)
             end_token = start + match.end(0)
@@ -466,7 +474,7 @@ class Document:
     #endregion
 
 class TokenWeighting:
-    """Abstract class for token weighting schemes (i.e., 'ICTokenWeighting' and 'UniformTokenWeighting')"""
+    """Abstract class for token weighting schemes (i.e., `ICTokenWeighting` and `UniformTokenWeighting`)"""
 
     @abc.abstractmethod
     def get_weights(self, text:str, text_spans:List[Tuple[int,int]]) -> np.ndarray:
@@ -503,13 +511,14 @@ class ICTokenWeighting(TokenWeighting):
     tokenizer=None
     
     def __init__(self, model_name:str, device:str, max_segment_length:int):
-        """Initializes the 'ICTokenWeighting'
+        """Initializes the `ICTokenWeighting`
 
         Args:
-            model_name (str): The name of the BERT model to use (e.g., 'bert-base-uncased').
-            device (str): The device to run the model on (e.g., 'cpu' or 'cuda').
+            model_name (str): The name of the BERT model to use (e.g., "bert-base-uncased").
+            device (str): The device to run the model on (e.g., "cpu" or "cuda").
             max_segment_length (int): The maximum sequence length for the model.
         """
+
         self.max_segment_length = max_segment_length
         self.model_name = model_name
         self.device = device
@@ -590,6 +599,7 @@ class ICTokenWeighting(TokenWeighting):
         Initializes the BERT model and tokenizer from the pre-trained model name.
         Only executed the first time the get_weights method is invoked.
         """
+
         self.model = AutoModelForMaskedLM.from_pretrained(self.model_name, trust_remote_code=True)
         self.model = self.model.to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
@@ -686,6 +696,7 @@ class ICTokenWeighting(TokenWeighting):
     def __del__(self):
         """Method invoked when deleting the instance to dispose the model and the tokenizer
         (if these are already defined)"""
+
         if not self.model is None:
             del self.model
         if not self.tokenizer is None:
@@ -709,6 +720,7 @@ class UniformTokenWeighting(TokenWeighting):
             np.ndarray: A NumPy array with all weights set to 1.0, with the same length
                 as `text_spans`.
         """
+
         return np.ones(len(text_spans))
 
 #endregion
@@ -716,8 +728,10 @@ class UniformTokenWeighting(TokenWeighting):
 
 #region TAE
 
+# TODO: Check all input and output typing (specially for private methods)
 class TAE:
-    """Text Anonymization Evaluator (TAE), defined by the corpus for text anonymization.
+    """Text Anonymization Evaluator (TAE) class, defined for the utility and privacy assessment of a text anonymization corpus.
+    It is instanciated for a particular corpus, and provides functions for several evaluation metrics.
     Optionally, the corpus can include gold annotations, used for precision and recall metrics."""
 
     #region Attributes
@@ -733,6 +747,14 @@ class TAE:
     #region Initialization
     
     def __init__(self, corpus:List[Document], spacy_model_name:str=SPACY_MODEL_NAME):
+        """
+        Initializes the `TAE` with a given corpus and spaCy model.
+
+        Args:
+            corpus (List[Document]): The list of documents to be evaluated.
+            spacy_model_name (str): The name of the spaCy model to load.
+        """
+
         # Documents indexed by identifier
         self.documents = {}
 
@@ -773,7 +795,17 @@ class TAE:
                               TRIR_METRIC_NAME:self.get_TRIR}
 
     @classmethod
-    def from_file_path(cls, corpus_file_path:str, spacy_model_name:str=SPACY_MODEL_NAME):
+    def from_file_path(self, corpus_file_path:str, spacy_model_name:str=SPACY_MODEL_NAME):
+        """
+        Initializes the `TAE` from a JSON corpus file.
+
+        Args:
+            corpus_file_path (str): The path to the corpus JSON file.
+            spacy_model_name (str): The name of the spaCy model to load.
+
+        Returns:
+            TAE: An instance of the TAE class.
+        """
         with open(corpus_file_path, encoding="utf-8") as f:
             corpus = json.load(f)
         if type(corpus)!=list:
@@ -785,7 +817,21 @@ class TAE:
 
     #region Evaluation
 
-    def evaluate(self, anonymizations:Dict[str, List[MaskedDocument]], metrics:dict, results_file_path:Optional[str]=None) -> dict:
+    def evaluate(self, anonymizations:Dict[str, List[MaskedDocument]], metrics:Dict[str,dict], results_file_path:Optional[str]=None) -> dict:
+        """
+        Evaluates multiple anonymizations based on the specified metrics.
+
+        Args:
+            anonymizations (Dict[str, List[MaskedDocument]]): A dictionary where keys are anonymization names
+                                                                and values are lists of masked documents.
+            metrics (Dict[str, dict]): A dictionary where keys are metric names and values are their parameters.
+            Metric names are splitted by underscores ("_"). The string before the first underscore must be one of those present in `METRIC_NAMES`.
+            results_file_path (Optional[str]): The path to a file where results will be written.
+
+        Returns:
+            dict: A dictionary containing the evaluation results for each metric and anonymization.
+        """
+        
         results = {}
 
         # Initial checks
@@ -876,7 +922,7 @@ class TAE:
             os.makedirs(directory, exist_ok=True) # Create directory (including intermediate ones)
 
         # Store the row of results
-        with open(results_file_path, 'a+', newline='') as csvfile:
+        with open(results_file_path, "a+", newline="") as csvfile:
             writer = csv.writer(csvfile)
             datetime_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             writer.writerow([datetime_str]+values)
@@ -884,7 +930,149 @@ class TAE:
     #endregion
 
 
-    #region Metrics
+    #region Privacy metrics
+
+
+    #region Recall
+
+    def get_recall(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
+                    include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> float:
+        """
+        Returns the mention or token-level recall of the masked spans when compared to the gold annotations. 
+        This metric is used to assess privacy protection.
+        This metric implementation was initially presented in [The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization](https://aclanthology.org/2022.cl-4.19/) (Pilán et al., CL 2022)
+
+        Args:
+            masked_docs (List[MaskedDocument]): Documents together with spans masked by the anonymization method.
+            include_direct (bool): Whether to include direct identifiers in the metric.
+            include_quasi (bool): Whether to include quasi identifiers in the metric.
+            token_level (bool): Whether to compute the recall at the level of tokens or mentions.
+
+        Returns:
+            float: The recall score.
+        """
+
+        nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
+                                                                  include_quasi, token_level)
+        
+        nb_masked_elements = sum(nb_masked_by_type.values())
+        nb_elements = sum(nb_by_type.values())
+                
+        try:
+            return nb_masked_elements / nb_elements
+        except ZeroDivisionError:
+            return 0
+    
+    def get_recall_per_entity_type(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
+                                   include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> Dict[str,float]:
+        """
+        Returns the mention or token-level recall of the masked spans when compared
+        to the gold annotations, and factored by entity type.
+        This metric implementation was initially presented in [The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization](https://aclanthology.org/2022.cl-4.19/) (Pilán et al., CL 2022)
+
+        Args:
+            masked_docs (List[MaskedDocument]): Documents together with spans masked by the system.
+            include_direct (bool): Whether to include direct identifiers in the metric.
+            include_quasi (bool): Whether to include quasi identifiers in the metric.
+            token_level (bool): Whether to compute the recall at the level of tokens or mentions.
+
+        Returns:
+            dict: A dictionary where keys are entity types and values are their corresponding recall scores.
+        """
+        
+        nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
+                                                                  include_quasi, token_level)
+        
+        return {ent_type:nb_masked_by_type[ent_type]/nb_by_type[ent_type]
+                for ent_type in nb_by_type}
+                
+    def _get_mask_counts(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
+                                   include_quasi:bool=RECALL_INCLUDE_QUASI,
+                                   token_level:bool=RECALL_TOKEN_LEVEL) -> Tuple[Dict[str,int],Dict[str,int]]:
+        nb_masked_elements_by_type = {}
+        nb_elements_by_type = {}
+        
+        for doc in masked_docs:            
+            gold_doc = self.documents[doc.doc_id]           
+            for entity in gold_doc.get_entities_to_mask(include_direct, include_quasi):
+                
+                if entity.entity_type not in nb_elements_by_type:
+                    nb_elements_by_type[entity.entity_type] = 0
+                    nb_masked_elements_by_type[entity.entity_type] = 0
+                
+                spans = list(entity.mentions)
+                if token_level:
+                    spans = [(start, end) for mention_start, mention_end in spans
+                             for start, end in gold_doc.split_by_tokens(mention_start, mention_end)]
+                
+                for start, end in spans:
+                    if gold_doc.is_mention_masked(doc, start, end):
+                        nb_masked_elements_by_type[entity.entity_type] += 1
+                    nb_elements_by_type[entity.entity_type] += 1
+        
+        return nb_masked_elements_by_type, nb_elements_by_type
+
+    #endregion
+
+
+    #region TRIR
+
+    def get_TRIR(self, anonymizations:Dict[str, List[MaskedDocument]],
+                 background_knowledge_file_path:str, output_folder_path:str, #TODO: Maybe, autogenerate output_folder_path
+                 verbose:bool=True, **kwargs) -> Dict[str, float]: #TODO: Add verbose to each metric
+        """
+        Calculates the Text Re-Identification Risk (TRIR) for given anonymizations, simulating a re-identification attack on the same basis as record linkage.
+        This metric is used to empirically assess privacy protection.
+        This metric was proposed in [Evaluating the disclosure risk of anonymized documents via a machine learning-based re-identification attack](https://link.springer.com/article/10.1007/s10618-024-01066-3) (Manzanares-Salor et al., DAMI 2024)
+
+        Args:
+            anonymizations (Dict[str, List[MaskedDocument]]): A dictionary where keys are anonymization names
+                                                                and values are lists of masked documents.
+            background_knowledge_file_path (str): Path to the background knowledge JSON file.
+            output_folder_path (str): Path to the folder where TRI outputs (e.g., trained model) will be stored.
+            verbose (bool): Whether to print verbose output during execution.
+            **kwargs: Additional keyword arguments to be passed to the TRI class constructor. Check `README.md` or the [Text Re-Identification repository](https://github.com/BenetManzanaresSalor/TextRe-Identification) for more information.
+
+        Returns:
+            dict: A dictionary where keys are anonymization names and values are their TRIR scores.
+        """
+        
+        # Load corpora
+        corpora = self._get_anonymization_corpora(anonymizations)
+
+        # Load background knowledge and add it to the corpora
+        with open(background_knowledge_file_path, "r", encoding="utf-8") as f:
+            bk_dict = json.load(f)        
+        for doc_id, bk in bk_dict.items():
+            doc_dict = corpora.get(doc_id, {})
+            doc_dict[BACKGROUND_KNOWLEDGE_KEY] = bk
+            corpora[doc_id] = doc_dict #TODO: Test with BK that are supersets
+
+        # Create dataframe from corpora
+        dataframe = pd.DataFrame.from_dict(list(corpora.values())) #TODO: Why results change when compared with original TRI?
+        #dataframe.to_json("dataframe.json", orient="records") #TODO: Remove this
+
+        # Create and run TRI
+        tri = TRI(
+            dataframe=dataframe,
+            background_knowledge_column=BACKGROUND_KNOWLEDGE_KEY,
+            output_folder_path=output_folder_path,
+            individual_name_column=DOC_ID_KEY,
+            **kwargs)        
+        results = tri.run(verbose=verbose)
+
+        # Obtain TRIR
+        results = {anon_name:values["eval_Accuracy"] for anon_name, values in results.items()}
+
+        return results
+
+    #endregion
+
+
+    #endregion
+
+
+    #region Utility metrics
 
 
     #region Precision
@@ -893,16 +1081,25 @@ class TAE:
     def get_precision(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=None,
                       weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH,
                       token_level:bool=PRECISION_TOKEN_LEVEL) -> float:
-        """Returns the weighted, token-level precision of the masked spans when compared 
-        to the gold annotations. Arguments:
-        - masked_docs: documents together with spans masked by the system
-        - weighting_model_name: name of the model for information content weighting. If none, uniform token is used.
-        - token_level: If token_level is set to true, the precision is computed at the level of tokens, 
-        otherwise the precision is at the mention-level. 
-        
-        The masked spans/tokens are weighted by their information content, given the provided
-        weighting scheme. If annotations from several annotators are available for a given
-        document, the precision corresponds to a micro-average over the annotators."""
+        """
+        Returns the precision of the masked spans when compared to the gold annotations.
+        This metric is used to assess utility preservation.
+        Optionally, it can be weighted considering information content (with `ICTokenWeighting`) 
+        and be computed at token-level or at mention-level.
+        If annotations from several annotators are available for a given document,
+        the precision corresponds to a micro-average over the annotators.
+        This metric implementation was initially presented in [The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization](https://aclanthology.org/2022.cl-4.19/) (Pilán et al., CL 2022)
+
+        Args:
+            masked_docs (List[MaskedDocument]): Documents together with spans masked by the anonymization method.
+            weighting_model_name (Optional[str]): Name of the model for `ICTokenWeighting`. If none, uniform token is used.
+            weighting_max_segment_length (int): Maximum segment length for `ICTokenWeighting`.
+            token_level (bool): If token_level is set to True, the precision is computed at the level of tokens, 
+                                otherwise the precision is at the mention-level.
+
+        Returns:
+            float: The precision score.
+        """
         
         weighted_true_positives = 0.0
         weighted_system_masks = 0.0
@@ -914,25 +1111,26 @@ class TAE:
         else:
             token_weighting = ICTokenWeighting(model_name=weighting_model_name, device=DEVICE,
                                                max_segment_length=weighting_max_segment_length)
-                
+        
+        # For each masked document
         for doc in masked_docs:
             gold_doc = self.documents[doc.doc_id]
             
             # We extract the list of spans (token- or mention-level)
-            system_masks = []
+            anonymization_masks = []
             for start, end in doc.masked_spans:
                 if token_level:
-                    system_masks += list(gold_doc.split_by_tokens(start, end))
+                    anonymization_masks += list(gold_doc.split_by_tokens(start, end))
                 else:
-                    system_masks += [(start,end)]
+                    anonymization_masks += [(start,end)]
             
             # We compute the weights (information content) of each mask
-            weights = token_weighting.get_weights(gold_doc.text, system_masks)
+            weights = token_weighting.get_weights(gold_doc.text, anonymization_masks)
             
             # We store the number of annotators in the gold standard document
             nb_annotators = len(set(entity.annotator for entity in gold_doc.gold_annotated_entities.values()))
             
-            for (start, end), weight in zip(system_masks, weights):
+            for (start, end), weight in zip(anonymization_masks, weights):
                 
                 # We extract the annotators that have also masked this token/span
                 annotators = gold_doc.get_annotators_for_span(start, end)
@@ -952,87 +1150,21 @@ class TAE:
 
     def get_weighted_precision(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=IC_WEIGHTING_MODEL_NAME,
                       weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH,
-                      token_level:bool=PRECISION_TOKEN_LEVEL):
-        """Precision version that, by default, uses IC weighting"""
+                      token_level:bool=PRECISION_TOKEN_LEVEL) -> float:
+        """
+        Returns the precision of the masked spans, with Information Content (IC) weighting by default.
+        This defines a wrapper around the `get_precision` method for avoiding the need to select the `weighting_model_name` for IC weighting.
+
+        Args:
+            masked_docs (List[MaskedDocument]): Documents together with spans masked by the anonymization method.
+            weighting_model_name (Optional[str]): Name of the model for `ICTokenWeighting`. Defaults to `IC_WEIGHTING_MODEL_NAME`.
+            weighting_max_segment_length (int): Maximum segment length for `ICTokenWeighting`.
+            token_level (bool): If token_level is set to True, the precision is computed at the level of tokens,
+                                otherwise the precision is at the mention-level.
+        """
         return self.get_precision(masked_docs, weighting_model_name=weighting_model_name,
                       weighting_max_segment_length=weighting_max_segment_length,
                       token_level=token_level)
-
-    #endregion
-    
-
-    #region Recall
-
-    def get_recall(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
-                    include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> float:
-        """Returns the mention or token-level recall of the masked spans when compared 
-        to the gold annotations. 
-        
-        Arguments:
-        - masked_docs: documents together with spans masked by the system
-        - include_direct: whether to include direct identifiers in the metric
-        - include_quasi: whether to include quasi identifiers in the metric
-        - token_level: whether to compute the recall at the level of tokens or mentions
-                
-        If annotations from several annotators are available for a given document, the recall 
-        corresponds to a micro-average over the annotators."""
-
-        nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
-                                                                  include_quasi, token_level)
-        
-        nb_masked_elements = sum(nb_masked_by_type.values())
-        nb_elements = sum(nb_by_type.values())
-                
-        try:
-            return nb_masked_elements / nb_elements
-        except ZeroDivisionError:
-            return 0
-    
-    def get_recall_per_entity_type(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
-                                   include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> dict:
-        """Returns the mention or token-level recall of the masked spans when compared 
-        to the gold annotations, and factored by entity type. 
-        
-        Arguments:
-        - masked_docs: documents together with spans masked by the system
-        - include_direct: whether to include direct identifiers in the metric
-        - include_quasi: whether to include quasi identifiers in the metric
-        - token_level: whether to compute the recall at the level of tokens or mentions
-                
-        If annotations from several annotators are available for a given document, the recall 
-        corresponds to a micro-average over the annotators."""
-        
-        nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
-                                                                  include_quasi, token_level)
-        
-        return {ent_type:nb_masked_by_type[ent_type]/nb_by_type[ent_type]
-                for ent_type in nb_by_type}
-                
-    def _get_mask_counts(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
-                                   include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> Tuple[dict, dict]:
-        
-        nb_masked_elements_by_type = {}
-        nb_elements_by_type = {}
-        
-        for doc in masked_docs:            
-            gold_doc = self.documents[doc.doc_id]           
-            for entity in gold_doc.get_entities_to_mask(include_direct, include_quasi):
-                
-                if entity.entity_type not in nb_elements_by_type:
-                    nb_elements_by_type[entity.entity_type] = 0
-                    nb_masked_elements_by_type[entity.entity_type] = 0         
-                
-                spans = list(entity.mentions)
-                if token_level:
-                    spans = [(start, end) for mention_start, mention_end in spans
-                             for start, end in gold_doc.split_by_tokens(mention_start, mention_end)]
-                
-                for start, end in spans:
-                    if gold_doc.is_mention_masked(doc, start, end):
-                        nb_masked_elements_by_type[entity.entity_type] += 1
-                    nb_elements_by_type[entity.entity_type] += 1
-        
-        return nb_masked_elements_by_type, nb_elements_by_type
 
     #endregion
     
@@ -1041,8 +1173,35 @@ class TAE:
     
     def get_TPI(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=IC_WEIGHTING_MODEL_NAME,
             weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH, 
-            term_alterning=TPI_TERM_ALTERNING, use_chunking:bool=TPI_USE_CHUNKING,
+            term_alterning:Union[int,str]=TPI_TERM_ALTERNING, use_chunking:bool=TPI_USE_CHUNKING,
             ICs_dict:Optional[Dict[str,np.ndarray]]=None) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
+        """
+        Text Preserved Information (TPI) measures the percentage of information content (IC) still present in the masked documents.
+        This metric is used to assess utility preservation. It employs `ICTokenWeighting` for measuring IC.
+        It can be seen as an simplified/ablated version of Text Preserved Similarity (TPS), without taking into account replacements and their similarities.
+
+        Args:
+            masked_docs (List[MaskedDocument]): Documents together with spans masked by the anonymization method.
+            weighting_model_name (Optional[str]): Name of the model for `ICTokenWeighting`. If None, uniform weighting is used (not intended for this metric).
+            weighting_max_segment_length (int): Maximum segment length for `ICTokenWeighting`.
+            term_alterning (Union[int,str]): Parameter for term alternation in IC calculation.
+                It can be an integer (e.g., N = 6) or the string "sentence." 
+                When using an integer N, one of the N terms will be masked each round.
+                A larger N value implies a more accurate IC estimation (up to a certain point), but slower computation because more rounds are required.
+                If "sentence" is used, the text will be split into sentences, and one of the sentence terms will be masked at each round.
+                This approach is significantly slower but may provide the most accurate IC estimation.
+            use_chunking (bool): Whether to use chunking for term span extraction. It is recommended for a more precise IC calculation.
+            ICs_dict (Optional[Dict[str,np.ndarray]]): Precomputed IC values for documents. 
+            Used in `evaluate` to avoid recomputing, for each anonymization, the original document's ICs (which are always identical).
+
+        Returns:
+            Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
+                - float: The average TPI for the corpus.
+                - np.ndarray: An array of TPI values for each document.
+                - Dict[str,np.ndarray]: A dictionary containing precomputed ICs (used for caching).
+                - np.ndarray: An array of IC multipliers (i.e., IC of masked terms divided by IC of non-masked terms) for each document.
+        """
+
         # Initialize outputs
         tpi_array = np.empty(len(masked_docs))
         if ICs_dict is None:
@@ -1100,6 +1259,36 @@ class TAE:
             weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH, term_alterning=TPS_TERM_ALTERNING,
             similarity_model_name:str=TPS_SIMILARITY_MODEL_NAME, use_chunking:bool=TPS_USE_CHUNKING,
             ICs_dict:Optional[Dict[str,np.ndarray]]=None) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
+        """
+        Text Preserved Similarity (TPS) measures the percentage of information content (IC) still present in the masked documents,
+        weighted by the similarity of replacement terms.
+        This metric is used to assess utility preservation for replacement-based masking (i.e., text sanitization).
+        It employs `ICTokenWeighting` for measuring IC and a specified similarity model for replacement similarity.
+        This metric was proposed in [Truthful Text Sanitization Guided by Inference Attacks](https://arxiv.org/abs/2412.12928) (Pilán et al., arXiv 2024)
+
+        Args:
+            masked_docs (List[MaskedDocument]): Documents together with spans masked by the anonymization method.
+            weighting_model_name (Optional[str]): Name of the model for `ICTokenWeighting`. If None, uniform weighting is used.
+            weighting_max_segment_length (int): Maximum segment length for `ICTokenWeighting`.
+            term_alterning: Parameter for term alternation in IC calculation.
+                It can be an integer (e.g., N = 6) or the string "sentence." 
+                When using an integer N, one of the N terms will be masked each round.
+                A larger N value implies a more accurate IC estimation (up to a certain point), but slower computation because more rounds are required.
+                If "sentence" is used, the text will be split into sentences, and one of the sentence terms will be masked at each round.
+                This approach is significantly slower but may provide the most accurate IC estimation.
+            similarity_model_name (str): The name of the embedding model to use for calculating text similarity.
+            use_chunking (bool): Whether to use chunking for term span extraction. It is recommended for a more precise IC calculation.
+            ICs_dict (Optional[Dict[str,np.ndarray]]): Precomputed IC values for documents. 
+            Used in `evaluate` to avoid recomputing, for each anonymization, the original document's ICs (which are always identical).
+
+        Returns:
+            Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
+                - float: The average TPS for the corpus.
+                - np.ndarray: An array of TPS values for each document.
+                - Dict[str,np.ndarray]: A dictionary containing precomputed ICs (used for caching).
+                - np.ndarray: An array of similarities for replacements.
+        """
+        
         # Initialize outputs
         tps_array = np.empty(len(masked_docs))
         if ICs_dict is None:
@@ -1294,7 +1483,8 @@ class TAE:
 
         return spans_IC
     
-    def _get_spans_ICs(self, spans: List[Tuple[int,int]], doc:Document, token_weighting: TokenWeighting, context_span:Optional[Tuple[int,int]]=None) -> np.ndarray:
+    def _get_spans_ICs(self, spans: List[Tuple[int,int]], doc:Document, token_weighting: TokenWeighting,
+                        context_span:Optional[Tuple[int,int]]=None) -> np.ndarray:
         # By default, context span is all the document
         if context_span is None:
             context_span = (0, len(doc.text))
@@ -1313,7 +1503,7 @@ class TAE:
 
         return ICs
     
-    def _get_embedding_func(self, sim_model_name:str):
+    def _get_embedding_func(self, sim_model_name:str) -> Tuple:
         embedding_model = None
 
         if sim_model_name is None: # Default spaCy model
@@ -1324,7 +1514,8 @@ class TAE:
         
         return embedding_func, embedding_model
     
-    def _get_replacements_info(self, masked_doc:MaskedDocument, doc:Document, spans:List[Tuple[int, int]]) -> Tuple[list, list, list]:
+    def _get_replacements_info(self, masked_doc:MaskedDocument, doc:Document,
+                               spans:List[Tuple[int, int]]) -> Tuple[List[str], List[str], List[List[int]]]:
         replacements = []
         masked_texts = []
         spans_idxs_per_replacement = []
@@ -1360,7 +1551,38 @@ class TAE:
     def get_NMI(self, anonymizations:Dict[str, List[MaskedDocument]], min_k:int=NMI_MIN_K, max_k:int=NMI_MAX_K,
                 k_multiplier:int=NMI_K_MULTIPLIER, embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
                 remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=MASKING_MARKS,
-                n_clusterings:int=NMI_N_CLUSTERINGS, n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> np.ndarray:
+                n_clusterings:int=NMI_N_CLUSTERINGS,
+                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[Dict[str,float], List[List[np.ndarray]], np.ndarray, int]:
+        """
+        Computes the Normalized Mutual Information (NMI) between the original corpus and anonymized corpora in document clustering.
+        This metric is used to measure empirical utility preservation in a generic downstream task.        
+        NMI measures how well the K-means++ clusters formed by the anonymized texts align with the clusters formed by the original texts.
+        Clustering is repeated multiple times for minimizing the impact of randomness.
+        This metric was proposed in [Truthful Text Sanitization Guided by Inference Attacks](https://arxiv.org/abs/2412.12928) (Pilán et al., arXiv 2024)
+        For this particular implementation, clustering is carried out with multiple Ks,
+        choosing as a result the one which provided the best silouhette score in original texts clustering.
+
+        Args:
+            anonymizations (Dict[str, List[MaskedDocument]]): A dictionary where keys are anonymization names and values are lists of masked documents.
+            min_k (int): The minimum number of clusters `k` to consider.
+            max_k (int): The maximum number of clusters `k` to consider.
+            k_multiplier (int): The multiplier to increase `k` for each iteration.
+                Iterations start with from `min_k` and ending when `max_k` is surpassed.
+            embedding_model_name (str): The name of the embedding model to use for text vectorial representation.
+            remove_mask_marks (bool): Whether to remove mask marks (e.g., "SENSITIVE" or "PERSON") from the text before embedding.
+            mask_marks (List[str]): A list of mask marks to remove if `remove_mask_marks` is True (by default `MASKING_MARKS`).
+            n_clusterings (int): The number of clusterings to perform for each `k`.
+            n_tries_per_clustering (int): The number of tries for each clustering. 
+            Total number of clusterings per `k` will be `n_clusterings`*`n_tries_per_clustering`
+
+        Returns:
+            Tuple[Dict[str,float], np.ndarray, np.ndarray, int]:
+                - Dict[str,float]: A dictionary containing the NMI scores for each anonymization.
+                - List[List[np.ndarray]]: A list of lists of clustering labels. 
+                    For each of the `n_clusterings` for the best `k`, for each of the anonymizations.
+                - np.ndarray: An array of silhouette scores for each evaluated `k`.
+                - int: The best `k` value chosen based on silhouette score.
+        """
         
         # Create the corpora
         orig_corpora = self._get_anonymization_corpora(anonymizations, include_original_text=True)
@@ -1372,16 +1594,14 @@ class TAE:
                                                    remove_mask_marks=remove_mask_marks, mask_marks=mask_marks)
         
         # Clustering results based on the maximum silhouette
-        values, all_labels, true_silhouettes, best_k = self._silhouette_based_NMI(corpora_embeddings, min_k=min_k, max_k=max_k, k_multiplier=k_multiplier,
+        values, all_corpora_labels, true_silhouettes, best_k = self._silhouette_based_NMI(corpora_embeddings, min_k=min_k, max_k=max_k, k_multiplier=k_multiplier,
                                                                       n_clusterings=n_clusterings, n_tries_per_clustering=n_tries_per_clustering)
         
-        # Prepare results        
+        # Prepare results
         values = values[1:] # Remove result for the first corpus (ground truth defined by the original texts)
         results = {anon_name:value for anon_name, value in zip(anonymizations.keys(), values)}
         
-        return results, all_labels, true_silhouettes, best_k
-
-    #region Embedding/feature extraction
+        return results, all_corpora_labels, true_silhouettes, best_k
 
     def _get_corpora_embeddings(self, corpora:List[List[str]], embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
                                  remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=MASKING_MARKS,
@@ -1411,13 +1631,9 @@ class TAE:
 
         return corpora_embeddings
 
-    #endregion
-
-    #region Clustering
-
     def _silhouette_based_NMI(self, corpora_embeddings:List[np.ndarray], min_k:int=NMI_MIN_K, max_k:int=NMI_MAX_K,
                 k_multiplier:int=NMI_K_MULTIPLIER, n_clusterings:int=NMI_N_CLUSTERINGS, 
-                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING):
+                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, List[List[np.ndarray]], np.ndarray, int]:
         # For multiple ks, use results with maximum silhouette        
         outputs_by_k = {}
         max_silhouette = float("-inf")
@@ -1433,25 +1649,29 @@ class TAE:
             k *= k_multiplier # By default, duplicate k
 
         logging.info(f"Clustering results for k={best_k} were selected because they correspond to the maximum silhouette ({max_silhouette:.3f})")
-        values, all_labels, true_silhouettes = outputs_by_k[best_k]
+        values, all_corpora_labels, true_silhouettes = outputs_by_k[best_k]
 
-        return values, all_labels, true_silhouettes, best_k
+        return values, all_corpora_labels, true_silhouettes, best_k
 
     def _get_corpora_multiclustering(self, corpora_embeddings:List[np.ndarray], k:int, n_clusterings:int=NMI_N_CLUSTERINGS,
-                                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, np.ndarray]:
+                                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING
+                                ) -> Tuple[np.ndarray, List[List[np.ndarray]], np.ndarray]:
         results = np.empty((n_clusterings, len(corpora_embeddings)))
+        all_corpora_labels = []
         true_silhouettes = np.empty(n_clusterings)
         for clustering_idx in tqdm(range(n_clusterings), desc=f"Clustering k={k}"):
             true_labels, corpora_labels, true_silhouettes[clustering_idx] = self._get_corpora_clustering(corpora_embeddings, k,
                                                                                                         tries_per_clustering=n_tries_per_clustering)
             results[clustering_idx, :] = self._compare_clusterings(true_labels, corpora_labels)
+            all_corpora_labels.append(corpora_labels)
 
         # Average for the n_clusterings
         results = results.mean(axis=0)
 
-        return results, corpora_labels, true_silhouettes
+        return results, all_corpora_labels, true_silhouettes
 
-    def _get_corpora_clustering(self, corpora_embeddings:List[np.ndarray], k:int, tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, List[np.ndarray]]:
+    def _get_corpora_clustering(self, corpora_embeddings:List[np.ndarray], k:int,
+                                 tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, List[np.ndarray], float]:
         corpora_labels = []
 
         # First corpus corresponds to the ground truth
@@ -1465,8 +1685,8 @@ class TAE:
 
         return true_labels, corpora_labels, true_silhouette
 
-    def _get_corpus_clustering(self, corpus_embeddings, k:int, tries:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, float]:
-        kmeanspp = KMeans(n_clusters=k, init='k-means++', n_init=tries)
+    def _get_corpus_clustering(self, corpus_embeddings, k:int, tries:int=NMI_N_TRIES_PER_CLUSTERING) -> np.ndarray:
+        kmeanspp = KMeans(n_clusters=k, init="k-means++", n_init=tries)
         labels = kmeanspp.fit_predict(corpus_embeddings)
         return labels
 
@@ -1485,50 +1705,13 @@ class TAE:
     #endregion
 
 
-    #region TRIR
-
-    def get_TRIR(self, anonymizations:Dict[str, List[MaskedDocument]], 
-                 background_knowledge_file_path:str, output_folder_path:str,
-                 verbose:bool=True, **kwargs): #TODO: Add verbose to each metric
-        # Load corpora
-        corpora = self._get_anonymization_corpora(anonymizations)
-
-        # Load background knowledge and add it to the corpora
-        with open(background_knowledge_file_path, "r", encoding="utf-8") as f:
-            bk_dict = json.load(f)        
-        for doc_id, bk in bk_dict.items():
-            doc_dict = corpora.get(doc_id, {})
-            doc_dict[BACKGROUND_KNOWLEDGE_KEY] = bk
-            corpora[doc_id] = doc_dict #TODO: Test with BK that are supersets
-
-        # Create dataframe from corpora
-        dataframe = pd.DataFrame.from_dict(list(corpora.values())) #TODO: Why results change when compared with original TRI?
-        #dataframe.to_json("dataframe.json", orient="records") #TODO: Remove this
-
-        # Create and run TRI
-        tri = TRI(
-            dataframe=dataframe,
-            background_knowledge_column=BACKGROUND_KNOWLEDGE_KEY,
-            output_folder_path=output_folder_path,
-            individual_name_column=DOC_ID_KEY,
-            **kwargs)        
-        results = tri.run(verbose=verbose)
-
-        # Obtain TRIR
-        results = {anon_name:values["eval_Accuracy"] for anon_name, values in results.items()}
-
-        return results
-
-    #endregion
-
-
     #endregion
 
 
     #region Auxiliar
     
     def _get_anonymization_corpora(self, anonymizations:Dict[str, List[MaskedDocument]],
-                                   include_original_text:bool=False) -> Dict[str,Dict[str,str]]:
+                                   include_original_text:bool=False) -> Dict[str, Dict[str,str]]:
         corpora = {}
         
         # Transform list of masked docs into dictionaries for faster processing
