@@ -2,7 +2,6 @@
 
 import json, re, os, gc
 os.environ["OMP_NUM_THREADS"] = "1" # Done before loading MKL to avoid: \sklearn\cluster\_kmeans.py:1382: UserWarning: KMeans is known to have a memory leak on Windows with MKL, when there are less chunks than available threads. You can avoid it by setting the environment variable OMP_NUM_THREADS=1
-from typing import Dict, List, Tuple, Optional #TODO: Use typing
 from datetime import datetime
 from collections import OrderedDict
 from argparse import Namespace
@@ -21,7 +20,7 @@ from transformers import Trainer, TrainingArguments, get_constant_schedule
 from transformers import DataCollatorForLanguageModeling, pipeline, Pipeline
 from accelerate import Accelerator
 
-import en_core_web_lg # This the spaCy model employed for TRIR (https://spacy.io/models/en#en_core_web_lg) #TODO: Change this from TRI to existing en_core_web_md?
+import en_core_web_lg # This the spaCy model employed for TRIR (https://spacy.io/models/en#en_core_web_lg)
 
 import logging
 
@@ -38,7 +37,7 @@ class TRI():
     mandatory_configs_names = ["output_folder_path", "dataframe",
         "individual_name_column", "background_knowledge_column"]
     output_folder_path = None
-    dataframe = None #TODO: Note this has been changed
+    dataframe = None #NOTE: This has been changed from the original repository (https://github.com/BenetManzanaresSalor/TextRe-Identification)
     individual_name_column = None
     background_knowledge_column = None
 
@@ -54,7 +53,7 @@ class TRI():
         "pretraining_learning_rate", "pretraining_mlm_probability", "pretraining_sliding_window",
         "save_finetuning", "load_saved_finetuning", "finetuning_epochs", "finetuning_batch_size",
         "finetuning_learning_rate", "finetuning_sliding_window", "dev_set_column_name"]
-    load_saved_pretreatment = False #TODO: Note this has been changed
+    load_saved_pretreatment = False #NOTE: This has been changed from the original repository (https://github.com/BenetManzanaresSalor/TextRe-Identification)
     add_non_saved_anonymizations = True
     anonymize_background_knowledge = True
     only_use_anonymized_background_knowledge = True
@@ -64,14 +63,14 @@ class TRI():
     tokenization_block_size = 250
     use_additional_pretraining = True
     save_additional_pretraining = True
-    load_saved_pretraining = False #TODO: Note this has been changed
+    load_saved_pretraining = False #NOTE: This has been changed from the original repository (https://github.com/BenetManzanaresSalor/TextRe-Identification)
     pretraining_epochs = 3
     pretraining_batch_size = 8
     pretraining_learning_rate = 5e-05
     pretraining_mlm_probability = 0.15
     pretraining_sliding_window = "512-128"
     save_finetuning = True
-    load_saved_finetuning = False #TODO: Note this has been changed
+    load_saved_finetuning = False #NOTE: This has been changed from the original repository (https://github.com/BenetManzanaresSalor/TextRe-Identification)
     finetuning_epochs = 15
     finetuning_batch_size = 16
     finetuning_learning_rate = 5e-05
@@ -331,7 +330,7 @@ class TRI():
     #region ########## Data reading ##########
 
     def read_data(self) -> pd.DataFrame:
-        data_df = self.dataframe #TODO: Note this has been changed (removing load from data_file_path)
+        data_df = self.dataframe #NOTE: This has been changed from the original repository (https://github.com/BenetManzanaresSalor/TextRe-Identification) (removing load from data_file_path)
 
         # Check required columns exist
         if not self.individual_name_column in data_df.columns:
@@ -836,7 +835,6 @@ class TRI():
         # Show results
         if verbose:
             for anon_name, res in self.trir_results.items():
-                #res_key = list(filter(lambda x:x.endswith("_Accuracy"), res.keys()))[0] #TODO: Check this
                 logging.info(f"TRIR for {anon_name} = {res['eval_Accuracy']:%}")
         
         if verbose: logging.info("######### END: PREDICT TRIR #########")

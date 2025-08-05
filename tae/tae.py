@@ -25,7 +25,7 @@ from .tri import TRI
 #endregion
 
 
-#region Constants/Settings #TODO: Move (some) of these constants to the TAE class?
+#region Constants/Settings #TODO: Move (some) of these constants to the TAE class? and utils into another file
 
 
 #region Input
@@ -563,7 +563,7 @@ class ICTokenWeighting(TokenWeighting):
         
         return weights
     
-    def get_weights_batched(self, texts:List[str], text_spans_batch:List[List[Tuple[int, int]]]) -> List[np.ndarray]:
+    def get_weights_batched(self, texts:List[str], texts_spans:List[List[Tuple[int, int]]]) -> List[np.ndarray]:
         """Returns a list of arrays of numeric information content weights for multiple texts.
         
         Each array corresponds to -log(probability of predicting the value of the text spans
@@ -574,15 +574,15 @@ class ICTokenWeighting(TokenWeighting):
 
         Args:
             texts (List[str]): A list of input texts.
-            text_spans_batch (List[List[Tuple[int,int]]]): A list of text span lists, where 
+            texts_spans (List[List[Tuple[int,int]]]): A list of text span lists, where 
                 each inner list contains spans for the corresponding text. Each span is 
                 represented as a tuple of (start_index, end_index).
 
         Returns:
             List[np.ndarray]: A list of NumPy arrays of numeric weights, with the same length as
-            `texts`. Each array has the same length as the corresponding `text_spans` list.
-            A weight close to 0 represents a span with low information content, while a 
-            higher weight represents high information content.
+                `texts`. Each array has the same length as the corresponding `text_spans` list.
+                A weight close to 0 represents a span with low information content, while a 
+                higher weight represents high information content.
         """
         
         # Create model if it is not already created
@@ -594,7 +594,7 @@ class ICTokenWeighting(TokenWeighting):
         batch_attention_masks = []
         batch_tokens_by_span = []
         batch_input_ids_seq = []        
-        for text, text_spans in zip(texts, text_spans_batch):
+        for text, text_spans in zip(texts, texts_spans):
             input_ids, attention_mask, tokens_by_span, input_ids_seq = self._prepare_input(text, text_spans)
             batch_input_ids.append(input_ids)
             batch_attention_masks.append(attention_mask)
@@ -619,7 +619,7 @@ class ICTokenWeighting(TokenWeighting):
         # Process each item in the batch
         batch_weights = []
         segment_idx = 0
-        for input_ids, input_ids_seq, text_spans, tokens_by_span in zip(batch_input_ids, batch_input_ids_seq, text_spans_batch, batch_tokens_by_span):
+        for input_ids, input_ids_seq, text_spans, tokens_by_span in zip(batch_input_ids, batch_input_ids_seq, texts_spans, batch_tokens_by_span):
             # Extract segments logits for this specific text
             text_n_segments = len(input_ids)
             logits = batch_logits[segment_idx:segment_idx+text_n_segments]
@@ -636,7 +636,7 @@ class ICTokenWeighting(TokenWeighting):
         
         return batch_weights
 
-    def get_weights_batched_optimized(self, texts:List[str], text_spans_batch:List[List[Tuple[int, int]]], 
+    def get_weights_batched_chunked(self, texts:List[str], texts_spans:List[List[Tuple[int, int]]], 
                                 batch_size:int=IC_WEIGHTING_BATCH_SIZE) -> List[np.ndarray]:
         """Optimized batched version that processes texts in smaller chunks if needed.
         
@@ -645,7 +645,7 @@ class ICTokenWeighting(TokenWeighting):
         
         Args:
             texts (List[str]): A list of input texts.
-            text_spans_batch (List[List[Tuple[int,int]]]): A list of text span lists.
+            texts_spans (List[List[Tuple[int,int]]]): A list of text span lists.
             batch_size (int): Number of texts/text_spans pair to process simultaneously.
             
         Returns:
@@ -657,7 +657,7 @@ class ICTokenWeighting(TokenWeighting):
         # Process in chunks (automatically handles remainder when len(texts) % batch_size != 0)
         for i in range(0, len(texts), batch_size):
             chunk_texts = texts[i:i+batch_size]  # Last chunk may be smaller than batch_size
-            chunk_spans = text_spans_batch[i:i+batch_size]            
+            chunk_spans = texts_spans[i:i+batch_size]
             
             chunk_weights = self.get_weights_batched(chunk_texts, chunk_spans)
             all_weights += chunk_weights
@@ -824,7 +824,7 @@ class UniformTokenWeighting(TokenWeighting):
 
 #region TAE
 
-# TODO: Check all input and output typing (specially for private methods)
+
 class TAE:
     """Text Anonymization Evaluator (TAE) class, defined for the utility and privacy assessment of a text anonymization corpus.
     It is instanciated for a particular corpus, and provides functions for several evaluation metrics.
@@ -943,47 +943,43 @@ class TAE:
             try:
                 metric_key = metric_name.split("_")[0] # Text before first underscore is name of the metric, the rest is freely used
                 partial_eval_func = self._get_partial_metric_func(metric_key, metric_parameters)
-                #TODO: If any error/exception happens, notify and skip to the next metric
 
                 # If metric is invalid, results are None
                 if partial_eval_func is None:
-                    metric_results = {anon_name:None for anon_name in anonymizations.keys()}
-
-                # For NMI and TRIR, evaluate all anonymizations at once
-                elif partial_eval_func.func==self.get_NMI or partial_eval_func.func==self.get_TRIR:
-                    output = partial_eval_func(anonymizations)
-                    metric_results = output[0] if isinstance(output, tuple) else output # If tuple, the first is metric_results
+                    logging.warning("There are no results because the metric name is invalid.")
                 
-                # Otherwise, compute metric for each anonymization
+                # Otherwise, compute
                 else:
-                    metric_results = {}
-                    ICs_dict = None # ICs cache for TPI and TPS
-                    with tqdm(anonymizations.items(), desc="Processing each anonymization") as pbar:
-                        for anon_name, masked_docs in pbar:
-                            pbar.set_description(f"Processing {anon_name} anonymization")
+                    # For NMI and TRIR, evaluate all anonymizations at once
+                    if partial_eval_func.func==self.get_NMI or partial_eval_func.func==self.get_TRIR:
+                        output = partial_eval_func(anonymizations)
+                        metric_results = output[0] if isinstance(output, tuple) else output # If tuple, the first is metric_results
+                    
+                    # Otherwise, compute metric for each anonymization
+                    else:
+                        metric_results = {}
+                        ICs_dict = None # ICs cache for TPI and TPS
+                        with tqdm(anonymizations.items(), desc="Processing each anonymization") as pbar:
+                            for anon_name, masked_docs in pbar:
+                                pbar.set_description(f"Processing {anon_name} anonymization")
 
-                            # For TPI and TPS, cache ICs
-                            if partial_eval_func.func==self.get_TPI or partial_eval_func.func==self.get_TPS:
-                                output = partial_eval_func(masked_docs, ICs_dict=ICs_dict)
-                                ICs_dict = output[2]
-                            # Otherwise, normal computation
-                            else:
-                                output = partial_eval_func(masked_docs)
-                            
-                            metric_results[anon_name] = output[0] if isinstance(output, tuple) else output  # If tuple, the first is metric's value
-                            #logging.info(f"{metric_name} for {anon_name}: {metric_results[anon_name]}") #TODO: Check if remove this or store the results after each metric
-                
-                # Save results
-                results[metric_name] = metric_results
-                if not partial_eval_func is None: # TODO: Check if preserve this if
+                                # For TPI and TPS, cache ICs
+                                if partial_eval_func.func==self.get_TPI or partial_eval_func.func==self.get_TPS:
+                                    output = partial_eval_func(masked_docs, ICs_dict=ICs_dict)
+                                    ICs_dict = output[2]
+                                # Otherwise, normal computation
+                                else:
+                                    output = partial_eval_func(masked_docs)
+                                
+                                metric_results[anon_name] = output[0] if isinstance(output, tuple) else output  # If tuple, the first is metric's value
+                                
+                    # Save results
+                    results[metric_name] = metric_results
                     if not results_file_path is None:
                         self._write_into_results(results_file_path, [metric_name]+list(metric_results.values()))
-                
-                # Show results all together for easy comparison
-                msg = f"Results for {metric_name}:"
-                if partial_eval_func is None:
-                    logging.info("All None because metric name is invalid")
-                else:
+                    
+                    # Show results all together for easy comparison
+                    msg = f"Results for {metric_name}:"
                     for name, value in results[metric_name].items():
                         msg += f"\n\t\t\t\t\t{name}: {value}"
                     logging.info(msg)
@@ -1009,7 +1005,7 @@ class TAE:
         for name, parameters in metrics.items():
             metric_key = name.split("_")[0]
             if not metric_key in METRIC_NAMES:
-                logging.warning(f"Metric {metric_key} (from {name}) is unknown, therefore its results will be None | Options: {METRIC_NAMES}")
+                logging.warning(f"Metric {metric_key} (from {name}) is unknown, so there will be no results. | Options: {METRIC_NAMES}")
             elif name in METRICS_REQUIRING_GOLD_ANNOTATIONS and self.gold_annotations_ratio < 1:
                 raise RuntimeError(f"Metric {name} depends on gold annotations, but these are not present for all documents (only for a {self.gold_annotations_ratio:.3%})")
 
@@ -1039,7 +1035,8 @@ class TAE:
     #region Recall
 
     def get_recall(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
-                    include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> float:
+                    include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL,
+                    verbose:bool=True) -> float:
         """
         Returns the mention or token-level recall of the masked spans when compared to the gold annotations. 
         This metric is used to assess privacy protection.
@@ -1050,9 +1047,10 @@ class TAE:
             include_direct (bool): Whether to include direct identifiers in the metric.
             include_quasi (bool): Whether to include quasi identifiers in the metric.
             token_level (bool): Whether to compute the recall at the level of tokens or mentions.
+            verbose (bool): Whether to print verbose output during execution.
 
         Returns:
-            float: The recall score.
+            recall (float): The recall score.
         """
 
         nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
@@ -1060,11 +1058,14 @@ class TAE:
         
         nb_masked_elements = sum(nb_masked_by_type.values())
         nb_elements = sum(nb_by_type.values())
-                
-        try:
-            return nb_masked_elements / nb_elements
-        except ZeroDivisionError:
-            return 0
+        
+        if nb_elements != 0:
+            recall = nb_masked_elements / nb_elements
+        else:
+            recall = 0
+            if verbose: logging.warning("Zero annotated identifiers, resulting in a recall of zero")
+        
+        return recall
     
     def get_recall_per_entity_type(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
                                    include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> Dict[str,float]:
@@ -1122,7 +1123,7 @@ class TAE:
 
     def get_TRIR(self, anonymizations:Dict[str, List[MaskedDocument]],
                  background_knowledge_file_path:str, output_folder_path:str,
-                 verbose:bool=True, **kwargs) -> Dict[str, float]: #TODO: Add verbose to each metric
+                 verbose:bool=True, **kwargs) -> Dict[str, float]:
         """
         Calculates the Text Re-Identification Risk (TRIR) for given anonymizations, simulating a re-identification attack on the same basis as record linkage.
         This metric is used to empirically assess privacy protection.
@@ -1181,7 +1182,8 @@ class TAE:
     
     def get_precision(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=None,
                       weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH,
-                      token_level:bool=PRECISION_TOKEN_LEVEL) -> float:
+                      token_level:bool=PRECISION_TOKEN_LEVEL,
+                      verbose:bool=True) -> float:
         """
         Returns the precision of the masked spans when compared to the gold annotations.
         This metric is used to assess utility preservation.
@@ -1197,6 +1199,7 @@ class TAE:
             weighting_max_segment_length (int): Maximum segment length for `ICTokenWeighting`.
             token_level (bool): If token_level is set to True, the precision is computed at the level of tokens, 
                                 otherwise the precision is at the mention-level.
+            verbose (bool): Whether to print verbose output during execution.
 
         Returns:
             float: The precision score.
@@ -1244,14 +1247,18 @@ class TAE:
         del token_weighting
 
         # Return results
-        try:
-            return weighted_true_positives / weighted_system_masks
-        except ZeroDivisionError:
-            return 0
+        if weighted_system_masks != 0:
+            precision = weighted_true_positives / weighted_system_masks
+        else:
+            precision = 0
+            if verbose: logging.warning("Zero detected identifiers, resulting in a precision of zero")
+        
+        return precision
 
     def get_weighted_precision(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=IC_WEIGHTING_MODEL_NAME,
                       weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH,
-                      token_level:bool=PRECISION_TOKEN_LEVEL) -> float:
+                      token_level:bool=PRECISION_TOKEN_LEVEL,
+                      verbose:bool=True) -> float:
         """
         Returns the precision of the masked spans, with Information Content (IC) weighting by default.
         This defines a wrapper around the `get_precision` method for avoiding the need to select the `weighting_model_name` for IC weighting.
@@ -1262,10 +1269,11 @@ class TAE:
             weighting_max_segment_length (int): Maximum segment length for `ICTokenWeighting`.
             token_level (bool): If token_level is set to True, the precision is computed at the level of tokens,
                                 otherwise the precision is at the mention-level.
+            verbose (bool): Whether to print verbose output during execution.
         """
         return self.get_precision(masked_docs, weighting_model_name=weighting_model_name,
                       weighting_max_segment_length=weighting_max_segment_length,
-                      token_level=token_level)
+                      token_level=token_level, verbose=verbose)
 
     #endregion
     
@@ -1293,7 +1301,7 @@ class TAE:
                 This approach is significantly slower but may provide the most accurate IC estimation.
             use_chunking (bool): Whether to use chunking for term span extraction. It is recommended for a more precise IC calculation.
             ICs_dict (Optional[Dict[str,np.ndarray]]): Precomputed IC values for documents. 
-            Used in `evaluate` to avoid recomputing, for each anonymization, the original document's ICs (which are always identical).
+                Used in `evaluate` to avoid recomputing, for each anonymization, the original document's ICs (which are always identical).
 
         Returns:
             Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
@@ -1337,7 +1345,7 @@ class TAE:
             masked_TIC = spans_IC[spans_mask].sum()
 
             # Compute document TPI
-            tpi_array[i] = masked_TIC / original_TIC if original_TIC != 0 else 0
+            tpi_array[i] = masked_TIC / original_TIC 
 
             # Compute document IC multiplier
             n_terms = len(spans)
@@ -1359,7 +1367,8 @@ class TAE:
     def get_TPS(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=IC_WEIGHTING_MODEL_NAME,
             weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH, term_alterning=TPS_TERM_ALTERNING,
             similarity_model_name:str=TPS_SIMILARITY_MODEL_NAME, use_chunking:bool=TPS_USE_CHUNKING,
-            ICs_dict:Optional[Dict[str,np.ndarray]]=None) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
+            ICs_dict:Optional[Dict[str,np.ndarray]]=None,
+            verbose:bool=True) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
         """
         Text Preserved Similarity (TPS) measures the percentage of information content (IC) still present in the masked documents,
         weighted by the similarity of replacement terms.
@@ -1380,7 +1389,7 @@ class TAE:
             similarity_model_name (str): The name of the embedding model to use for calculating text similarity.
             use_chunking (bool): Whether to use chunking for term span extraction. It is recommended for a more precise IC calculation.
             ICs_dict (Optional[Dict[str,np.ndarray]]): Precomputed IC values for documents. 
-            Used in `evaluate` to avoid recomputing, for each anonymization, the original document's ICs (which are always identical).
+                Used in `evaluate` to avoid recomputing, for each anonymization, the original document's ICs (which are always identical).
 
         Returns:
             Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
@@ -1486,8 +1495,7 @@ class TAE:
                     last_token = spacy_doc[chunk.end - 1]
                     end = last_token.idx + len(last_token)
                     text_spans.append((start, end))
-                    added_tokens[chunk.start:chunk.end] = True
-                
+                    added_tokens[chunk.start:chunk.end] = True                
 
         # Add text spans after last chunk (or all spans, if chunks are ignored)
         for token_idx in range(len(spacy_doc)):
@@ -1627,7 +1635,7 @@ class TAE:
             batch_spans.append(in_context_spans)
 
         # Process all groups in a single batch call
-        batch_ICs = token_weighting.get_weights_batched_optimized(batch_contexts, batch_spans)
+        batch_ICs = token_weighting.get_weights_batched_chunked(batch_contexts, batch_spans)
         
         return batch_ICs
     
@@ -1680,7 +1688,8 @@ class TAE:
                 k_multiplier:int=NMI_K_MULTIPLIER, embedding_model_name:str=NMI_EMBEDDING_MODEL_NAME,
                 remove_mask_marks:bool=NMI_REMOVE_MASK_MARKS, mask_marks:List[str]=MASKING_MARKS,
                 n_clusterings:int=NMI_N_CLUSTERINGS,
-                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[Dict[str,float], List[List[np.ndarray]], np.ndarray, int]:
+                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING,
+                verbose:bool=True) -> Tuple[Dict[str,float], List[List[np.ndarray]], np.ndarray, int]:
         """
         Computes the Normalized Mutual Information (NMI) between the original corpus and anonymized corpora in document clustering.
         This metric is used to measure empirical utility preservation in a generic downstream task.        
@@ -1701,7 +1710,8 @@ class TAE:
             mask_marks (List[str]): A list of mask marks to remove if `remove_mask_marks` is True (by default `MASKING_MARKS`).
             n_clusterings (int): The number of clusterings to perform for each `k`.
             n_tries_per_clustering (int): The number of tries for each clustering. 
-            Total number of clusterings per `k` will be `n_clusterings`*`n_tries_per_clustering`
+                Total number of clusterings per `k` will be `n_clusterings`*`n_tries_per_clustering`
+            verbose (bool): Whether to print verbose output during execution.
 
         Returns:
             Tuple[Dict[str,float], np.ndarray, np.ndarray, int]:
@@ -1723,7 +1733,8 @@ class TAE:
         
         # Clustering results based on the maximum silhouette
         values, all_corpora_labels, true_silhouettes, best_k = self._silhouette_based_NMI(corpora_embeddings, min_k=min_k, max_k=max_k, k_multiplier=k_multiplier,
-                                                                      n_clusterings=n_clusterings, n_tries_per_clustering=n_tries_per_clustering)
+                                                                      n_clusterings=n_clusterings, n_tries_per_clustering=n_tries_per_clustering,
+                                                                      verbose=verbose)
         
         # Prepare results
         values = values[1:] # Remove result for the first corpus (ground truth defined by the original texts)
@@ -1761,7 +1772,8 @@ class TAE:
 
     def _silhouette_based_NMI(self, corpora_embeddings:List[np.ndarray], min_k:int=NMI_MIN_K, max_k:int=NMI_MAX_K,
                 k_multiplier:int=NMI_K_MULTIPLIER, n_clusterings:int=NMI_N_CLUSTERINGS, 
-                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING) -> Tuple[np.ndarray, List[List[np.ndarray]], np.ndarray, int]:
+                n_tries_per_clustering:int=NMI_N_TRIES_PER_CLUSTERING,
+                verbose:bool=True) -> Tuple[np.ndarray, List[List[np.ndarray]], np.ndarray, int]:
         # For multiple ks, use results with maximum silhouette        
         outputs_by_k = {}
         max_silhouette = float("-inf")
@@ -1776,7 +1788,7 @@ class TAE:
                 max_silhouette, best_k = avg_silhouettee, k
             k *= k_multiplier # By default, duplicate k
 
-        logging.info(f"Clustering results for k={best_k} were selected because they correspond to the maximum silhouette ({max_silhouette:.3f})")
+        if verbose: logging.info(f"Clustering results for k={best_k} were selected because they correspond to the maximum silhouette ({max_silhouette:.3f})")
         values, all_corpora_labels, true_silhouettes = outputs_by_k[best_k]
 
         return values, all_corpora_labels, true_silhouettes, best_k
