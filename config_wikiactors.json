@@ -18,7 +18,7 @@
         "_Recall": {},
         "_RecallPerEntity":{},
         "TPI": {},
-        "TPI_S-TA": {"term_alterning":"sentence"},
+        "_TPI_S-TA": {"term_alterning":"sentence"},
         "_TPS": {},
         "_NMI_minilm":{
             "embedding_model_name":"all-MiniLM-L6-v2"
