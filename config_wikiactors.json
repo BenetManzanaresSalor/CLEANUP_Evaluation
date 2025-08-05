@@ -14,12 +14,11 @@
     "results_file_path": "outputs/results_wikiactors.csv",
     "metrics":{
         "Precision":{},
-        "_Precision_IC":{
-            "weighting_model_name": "google-bert/bert-base-uncased"
-        },
-        "Recall": {},
+        "_PrecisionWeighted":{},
+        "_Recall": {},
         "_RecallPerEntity":{},
         "TPI": {},
+        "_TPI_S-TA": {"term_alterning":"sentence"},
         "_TPS": {},
         "_NMI_minilm":{
             "embedding_model_name":"all-MiniLM-L6-v2"
@@ -27,14 +26,14 @@
         "_NMI_mpnet":{
             "embedding_model_name":"all-mpnet-base-v2"
         },
-        "NMI_bert":{
+        "_NMI_bert":{
             "embedding_model_name":"bert-base-cased"
         },
-        "TRIR":{
+        "_TRIR":{
             "output_folder_path": "outputs/WikiActors/50_eval",
-            "background_knowledge_file_path": "data/wikiactors/bks/WikiActors_50_eval_BK=Public.json",
+            "background_knowledge_file_path": "data/wikiactors/bks/WikiActors_500_filtered_BK=Public.json",
             "use_document_curation": true,
             "anonymize_background_knowledge": true
         }
-    }   
+    }
 }

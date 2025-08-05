@@ -19,18 +19,18 @@
     "results_file_path": "outputs/results.csv",
     "metrics":{
         "Precision":{},
-        "_WeightedPrecision":{},
-        "Recall": {},
+        "_PrecisionWeighted":{},
+        "_Recall": {},
         "_RecallPerEntity":{},
-        "_TPI": {},
+        "TPI": {},
         "_TPS": {},
-        "NMI_minilm":{
+        "_NMI_minilm":{
             "embedding_model_name":"all-MiniLM-L6-v2"
         },
-        "NMI_mpnet":{
+        "_NMI_mpnet":{
             "embedding_model_name":"all-mpnet-base-v2"
         },
-        "NMI_bert":{
+        "_NMI_bert":{
             "embedding_model_name":"bert-base-cased"
         },
         "_TRIR":{

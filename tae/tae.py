@@ -31,7 +31,7 @@ from .tri import TRI
 #region Input
 
 # Configuration dictionary keys
-CORPUS_CONFIG_KEY = "corpus_file_path" #TODO: Perhaps also accept a HuggingFace's dataset
+CORPUS_CONFIG_KEY = "corpus_file_path"
 ANONYMIZATIONS_CONFIG_KEY = "anonymizations"
 RESULTS_CONFIG_KEY = "results_file_path"
 METRICS_CONFIG_KEY = "metrics"
@@ -57,7 +57,7 @@ IDENTIFIER_TYPES = [INDENTIFIER_TYPE_DIRECT,
 
 # Metric names
 PRECISION_METRIC_NAME = "Precision"
-WEIGHTED_PRECISION_METRIC_NAME = "WeightedPrecision"
+WEIGHTED_PRECISION_METRIC_NAME = "PrecisionWeighted"
 RECALL_METRIC_NAME = "Recall"
 RECALL_PER_ENTITY_METRIC_NAME = "RecallPerEntity"
 TPI_METRIC_NAME = "TPI"
@@ -75,6 +75,7 @@ METRICS_REQUIRING_GOLD_ANNOTATIONS = [PRECISION_METRIC_NAME, WEIGHTED_PRECISION_
 SPACY_MODEL_NAME = "en_core_web_md"
 IC_WEIGHTING_MODEL_NAME = "google-bert/bert-base-uncased" #TODO: Update this and all other models
 IC_WEIGHTING_MAX_SEGMENT_LENGTH = 100
+IC_WEIGHTING_BATCH_SIZE = 128
 BACKGROUND_KNOWLEDGE_KEY = "background_knowledge" # For TRIR background knowledge file
 
 # POS tags, tokens or characters that can be ignored scores 
@@ -121,7 +122,7 @@ TPS_USE_CHUNKING = True
 TPS_SIMILARITY_MODEL_NAME = "paraphrase-albert-base-v2" # From the Sentence-Transformers library
 
 # NMI default settings
-NMI_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2" #TODO: Options: "all-MiniLM-L6-v2", "all-mpnet-base-v2" others from https://www.sbert.net/docs/sentence_transformer/pretrained_models.html or classic models such as "bert-base-cased"
+NMI_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2" # Options others from https://www.sbert.net/docs/sentence_transformer/pretrained_models.html or classic models such as "bert-base-cased"
 NMI_MIN_K = 2
 NMI_MAX_K = 32
 NMI_K_MULTIPLIER = 2
@@ -523,7 +524,6 @@ class ICTokenWeighting(TokenWeighting):
         self.model_name = model_name
         self.device = device
     
-    # TODO: Implement a batched version
     def get_weights(self, text:str, text_spans:List[Tuple[int,int]]) -> np.ndarray:
         """Returns an array of numeric information content weights, where each value
         corresponds to -log(probability of predicting the value of the text span
@@ -545,55 +545,125 @@ class ICTokenWeighting(TokenWeighting):
             difficult to predict from the context).
         """
 
-        # STEP 0: Create model if it is not already created
+        # Create model if it is not already created
         if self.model is None:
             self._create_model()
         
-        # STEP 1: we tokenise the text
-        bert_tokens = self.tokenizer(text, return_offsets_mapping=True)
-        input_ids = bert_tokens["input_ids"]
-        input_ids_copy = np.array(input_ids)
-        
-        # STEP 2: we record the mapping between spans and BERT tokens
-        bert_token_spans = bert_tokens["offset_mapping"]
-        tokens_by_span = self._get_tokens_by_span(bert_token_spans, text_spans, text)
-
-        # STEP 3: we mask the tokens that we wish to predict
-        attention_mask = bert_tokens["attention_mask"]
-        for token_indices in tokens_by_span.values():
-            for token_idx in token_indices:
-                attention_mask[token_idx] = 0
-                input_ids[token_idx] = self.tokenizer.mask_token_id
+        # Prepare inputs for predictions
+        input_ids, attention_mask, tokens_by_span, input_ids_seq = self._prepare_input(text, text_spans)
           
-        # STEP 4: we run the masked language model     
-        logits = self._get_model_predictions(input_ids, attention_mask)
-        unnorm_probs = torch.exp(logits)
-        probs = unnorm_probs / torch.sum(unnorm_probs, axis=1)[:,None]
+        # Run the masked language model     
+        logits = self.model(input_ids=input_ids, attention_mask=attention_mask).logits
+
+        # Obtain the probabilities for the actual tokens
+        probs = self._logits_to_probs(logits, input_ids_seq)
         
-        # We are only interested in the probs for the actual token values
-        probs_actual = probs[torch.arange(len(input_ids)), input_ids_copy]
-        probs_actual = probs_actual.detach().cpu().numpy()
-              
-        # STEP 5: we compute the weights from those predictions
-        weights = []
-        for (span_start, span_end) in text_spans:
-            
-            # If the span does not include any actual token, skip
-            if not tokens_by_span[(span_start, span_end)]:
-                weights.append(0)
-                continue
-            
-            # if the span has several tokens, we take the minimum prob
-            prob = np.min([probs_actual[token_idx] for token_idx in 
-                           tokens_by_span[(span_start, span_end)]])
-            
-            # We finally define the weight as -log(p)
-            weights.append(-np.log(prob))
-        
-        weights = np.array(weights) # Transform to NumPy array
+        # Transform the probabilities into weights with -log(probability)
+        weights = self._probs_to_weights(probs, text_spans, tokens_by_span)
         
         return weights
+    
+    def get_weights_batched(self, texts:List[str], text_spans_batch:List[List[Tuple[int, int]]]) -> List[np.ndarray]:
+        """Returns a list of arrays of numeric information content weights for multiple texts.
+        
+        Each array corresponds to -log(probability of predicting the value of the text spans
+        according to the BERT model) for the corresponding text.
 
+        If a span corresponds to several BERT tokens, the probability is the
+        minimum of the probabilities for each token.
+
+        Args:
+            texts (List[str]): A list of input texts.
+            text_spans_batch (List[List[Tuple[int,int]]]): A list of text span lists, where 
+                each inner list contains spans for the corresponding text. Each span is 
+                represented as a tuple of (start_index, end_index).
+
+        Returns:
+            List[np.ndarray]: A list of NumPy arrays of numeric weights, with the same length as
+            `texts`. Each array has the same length as the corresponding `text_spans` list.
+            A weight close to 0 represents a span with low information content, while a 
+            higher weight represents high information content.
+        """
+        
+        # Create model if it is not already created
+        if self.model is None:
+            self._create_model()
+        
+        # Prepare inputs for all texts in the batch
+        batch_input_ids = []
+        batch_attention_masks = []
+        batch_tokens_by_span = []
+        batch_input_ids_seq = []        
+        for text, text_spans in zip(texts, text_spans_batch):
+            input_ids, attention_mask, tokens_by_span, input_ids_seq = self._prepare_input(text, text_spans)
+            batch_input_ids.append(input_ids)
+            batch_attention_masks.append(attention_mask)
+            batch_tokens_by_span.append(tokens_by_span)
+            batch_input_ids_seq.append(input_ids_seq)
+        
+        # Stack inputs for batch processing (assuming they can be batched)
+        # Note: This assumes all sequences have the same length after padding
+        if len(batch_input_ids) == 1:
+            # For single text, preserve original dimensions
+            stacked_input_ids = batch_input_ids[0]
+            stacked_attention_masks = batch_attention_masks[0]
+        else:
+            # Concatenate all inputs along the first dimension
+            # This turns [(2,100), (2,100), (2,100)] into (6,100) for 3 texts with 2 masks each
+            stacked_input_ids = torch.cat(batch_input_ids, dim=0)
+            stacked_attention_masks = torch.cat(batch_attention_masks, dim=0)
+        
+        # Run the masked language model on the entire batch
+        batch_logits = self.model(input_ids=stacked_input_ids, attention_mask=stacked_attention_masks).logits
+        
+        # Process each item in the batch
+        batch_weights = []
+        segment_idx = 0
+        for input_ids, input_ids_seq, text_spans, tokens_by_span in zip(batch_input_ids, batch_input_ids_seq, text_spans_batch, batch_tokens_by_span):
+            # Extract segments logits for this specific text
+            text_n_segments = len(input_ids)
+            logits = batch_logits[segment_idx:segment_idx+text_n_segments]
+            
+            # Increment segment_idx
+            segment_idx += text_n_segments
+
+            # Obtain the probabilities for the actual tokens
+            probs = self._logits_to_probs(logits, input_ids_seq)
+            
+            # Transform the probabilities into weights with -log(probability)
+            weights = self._probs_to_weights(probs, text_spans, tokens_by_span)
+            batch_weights.append(weights)
+        
+        return batch_weights
+
+    def get_weights_batched_optimized(self, texts:List[str], text_spans_batch:List[List[Tuple[int, int]]], 
+                                batch_size:int=IC_WEIGHTING_BATCH_SIZE) -> List[np.ndarray]:
+        """Optimized batched version that processes texts in smaller chunks if needed.
+        
+        This version is useful when you have a large number of texts and want to control
+        memory usage by processing them in smaller batches.
+        
+        Args:
+            texts (List[str]): A list of input texts.
+            text_spans_batch (List[List[Tuple[int,int]]]): A list of text span lists.
+            batch_size (int): Number of texts/text_spans pair to process simultaneously.
+            
+        Returns:
+            List[np.ndarray]: A list of NumPy arrays of numeric weights.
+        """
+        
+        all_weights = []
+        
+        # Process in chunks (automatically handles remainder when len(texts) % batch_size != 0)
+        for i in range(0, len(texts), batch_size):
+            chunk_texts = texts[i:i+batch_size]  # Last chunk may be smaller than batch_size
+            chunk_spans = text_spans_batch[i:i+batch_size]            
+            
+            chunk_weights = self.get_weights_batched(chunk_texts, chunk_spans)
+            all_weights += chunk_weights
+        
+        return all_weights
+    
     def _create_model(self):
         """
         Initializes the BERT model and tokenizer from the pre-trained model name.
@@ -603,6 +673,43 @@ class ICTokenWeighting(TokenWeighting):
         self.model = AutoModelForMaskedLM.from_pretrained(self.model_name, trust_remote_code=True)
         self.model = self.model.to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+    
+    def _prepare_input(self, text:str, text_spans:List[Tuple[int,int]]):
+        # Tokenise the text
+        bert_tokens = self.tokenizer(text, return_offsets_mapping=True)
+        input_ids = bert_tokens["input_ids"]
+        n_tokens = len(input_ids) # Total number of tokens
+        input_ids_seq = np.array(input_ids) # Consecutive tokens, without segments
+        
+        # Record the mapping between spans and BERT tokens
+        bert_token_spans = bert_tokens["offset_mapping"]
+        tokens_by_span = self._get_tokens_by_span(bert_token_spans, text_spans, text)
+
+        # Mask the tokens that we wish to predict
+        attention_mask = bert_tokens["attention_mask"]
+        for token_indices in tokens_by_span.values():
+            for token_idx in token_indices:
+                attention_mask[token_idx] = 0
+                input_ids[token_idx] = self.tokenizer.mask_token_id
+        
+        # Upload to device
+        input_ids = torch.tensor(input_ids)[None,:].to(self.device)
+        attention_mask = torch.tensor(attention_mask)[None,:].to(self.device)
+        
+        # Split into segments of size max_segment_length
+        n_segments = math.ceil(n_tokens/self.max_segment_length)
+        
+        # Split the input_ids (and add padding if necessary)
+        split_pos = [self.max_segment_length * (i + 1) for i in range(n_segments - 1)]
+        input_ids_splits = torch.tensor_split(input_ids[0], split_pos)
+
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids_splits, batch_first=True)
+        
+        # Split the attention masks
+        attention_mask_splits = torch.tensor_split(attention_mask[0], split_pos)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask_splits, batch_first=True)        
+        
+        return input_ids, attention_mask, tokens_by_span, input_ids_seq
 
     def _get_tokens_by_span(self, bert_token_spans:List[Tuple[int,int]],
                             text_spans:List[Tuple[int,int]], text:str) -> Dict[Tuple[int,int],List[int]]:
@@ -641,57 +748,46 @@ class ICTokenWeighting(TokenWeighting):
         
         return tokens_by_span
     
-    def _get_model_predictions(self, input_ids:Union[List[int], torch.Tensor],
-                                attention_mask:Union[List[int], torch.Tensor]) -> torch.Tensor:
-        """Given tokenised input identifiers and an associated attention mask (where the
-        tokens to predict have a mask value set to 0), runs the BERT language and returns
-        the (unnormalised) prediction scores for each token.
-
-        If the input length is longer than max_segment_length, we split the document in
-        small segments, and then concatenate the model predictions for each segment.
-
-        Args:
-            input_ids (Union[List[int], torch.Tensor]): The input token IDs.
-            attention_mask (Union[List[int], torch.Tensor]): The attention mask, where
-                0 indicates tokens to be predicted.
-
-        Returns:
-            torch.Tensor: The (unnormalised) prediction scores for each token.
-        """
-        
-        nb_tokens = len(input_ids)
-        
-        input_ids = torch.tensor(input_ids)[None,:].to(self.device)
-        attention_mask = torch.tensor(attention_mask)[None,:].to(self.device)
-        
-        # If the number of tokens is too large, we split in segments
-        if nb_tokens > self.max_segment_length:
-            nb_segments = math.ceil(nb_tokens/self.max_segment_length)
-            
-            # Split the input_ids (and add padding if necessary)
-            split_pos = [self.max_segment_length * (i + 1) for i in range(nb_segments - 1)]
-            input_ids_splits = torch.tensor_split(input_ids[0], split_pos)
-
-            input_ids = torch.nn.utils.rnn.pad_sequence(input_ids_splits, batch_first=True)
-            
-            # Split the attention masks
-            attention_mask_splits = torch.tensor_split(attention_mask[0], split_pos)
-            attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask_splits, batch_first=True)
-                   
-        # Run the model on the tokenised inputs + attention mask
-        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        
-        # And get the resulting prediction scores
-        scores = outputs.logits
-        
+    def _logits_to_probs(self, logits:torch.Tensor,
+                         input_ids_seq:torch.Tensor) -> np.ndarray:
         # If the batch contains several segments, concatenate the result
-        if len(scores) > 1:
-            scores = torch.vstack([scores[i] for i in range(len(scores))])
-            scores = scores[:nb_tokens]
+        if len(logits) > 1:
+            logits = torch.vstack([logits[i] for i in range(len(logits))])
+            logits = logits[:len(input_ids_seq)]
         else:
-            scores = scores[0]
+            logits = logits[0]
         
-        return scores     
+        # Transform logits into probabilities
+        unnorm_probs = torch.exp(logits)
+        probs = unnorm_probs / torch.sum(unnorm_probs, axis=1)[:,None]
+
+        # We are only interested in the probs for the actual token values
+        probs_actual = probs[torch.arange(len(input_ids_seq)), input_ids_seq]
+        probs_actual = probs_actual.detach().cpu().numpy()
+
+        return probs_actual
+
+    def _probs_to_weights(self, probs:np.ndarray, text_spans:List[Tuple[int,int]],
+                           tokens_by_span:Dict[Tuple[int,int],List[int]]) -> np.ndarray:
+        # Compute the weights from those predictions
+        weights = []
+        for (span_start, span_end) in text_spans:
+            
+            # If the span does not include any actual token, skip
+            if not tokens_by_span[(span_start, span_end)]:
+                weights.append(0)
+                continue
+            
+            # If the span has several tokens, we take the minimum prob
+            prob = np.min([probs[token_idx] for token_idx in 
+                           tokens_by_span[(span_start, span_end)]])
+            
+            # We finally define the weight as -log(p)
+            weights.append(-np.log(prob))
+        
+        weights = np.array(weights) # Transform to NumPy array
+
+        return weights
 
     def __del__(self):
         """Method invoked when deleting the instance to dispose the model and the tokenizer
@@ -844,49 +940,56 @@ class TAE:
         # For each metric
         for metric_name, metric_parameters in metrics.items():
             logging.info(f"########################### Computing {metric_name} metric ###########################")
-            metric_key = metric_name.split("_")[0] # Text before first underscore is name of the metric, the rest is freely used
-            partial_eval_func = self._get_partial_metric_func(metric_key, metric_parameters)
-            #TODO: If any error/exception happens, notify and skip to the next metric
+            try:
+                metric_key = metric_name.split("_")[0] # Text before first underscore is name of the metric, the rest is freely used
+                partial_eval_func = self._get_partial_metric_func(metric_key, metric_parameters)
+                #TODO: If any error/exception happens, notify and skip to the next metric
 
-            # If metric is invalid, results are None
-            if partial_eval_func is None:
-                metric_results = {anon_name:None for anon_name in anonymizations.keys()}
+                # If metric is invalid, results are None
+                if partial_eval_func is None:
+                    metric_results = {anon_name:None for anon_name in anonymizations.keys()}
 
-            # For NMI and TRIR, evaluate all anonymizations at once
-            elif partial_eval_func.func==self.get_NMI or partial_eval_func.func==self.get_TRIR:
-                output = partial_eval_func(anonymizations)
-                metric_results = output[0] if isinstance(output, tuple) else output # If tuple, the first is metric_results
-            
-            # Otherwise, compute metric for each anonymization
-            else:
-                metric_results = {}
-                ICs_dict = None # ICs cache for TPI and TPS
-                with tqdm(anonymizations.items(), desc="Processing each anonymization") as pbar:
-                    for anon_name, masked_docs in pbar:
-                        pbar.set_description(f"Processing {anon_name} anonymization")
+                # For NMI and TRIR, evaluate all anonymizations at once
+                elif partial_eval_func.func==self.get_NMI or partial_eval_func.func==self.get_TRIR:
+                    output = partial_eval_func(anonymizations)
+                    metric_results = output[0] if isinstance(output, tuple) else output # If tuple, the first is metric_results
+                
+                # Otherwise, compute metric for each anonymization
+                else:
+                    metric_results = {}
+                    ICs_dict = None # ICs cache for TPI and TPS
+                    with tqdm(anonymizations.items(), desc="Processing each anonymization") as pbar:
+                        for anon_name, masked_docs in pbar:
+                            pbar.set_description(f"Processing {anon_name} anonymization")
 
-                        # For TPI and TPS, cache ICs
-                        if partial_eval_func.func==self.get_TPI or partial_eval_func.func==self.get_TPS:
-                            output = partial_eval_func(masked_docs, ICs_dict=ICs_dict)
-                            ICs_dict = output[2]
-                        # Otherwise, normal computation
-                        else:
-                            output = partial_eval_func(masked_docs)
-                        
-                        metric_results[anon_name] = output[0] if isinstance(output, tuple) else output  # If tuple, the first is metric's value
-                        #logging.info(f"{metric_name} for {anon_name}: {metric_results[anon_name]}") #TODO: Check if remove this or store the results after each metric
+                            # For TPI and TPS, cache ICs
+                            if partial_eval_func.func==self.get_TPI or partial_eval_func.func==self.get_TPS:
+                                output = partial_eval_func(masked_docs, ICs_dict=ICs_dict)
+                                ICs_dict = output[2]
+                            # Otherwise, normal computation
+                            else:
+                                output = partial_eval_func(masked_docs)
+                            
+                            metric_results[anon_name] = output[0] if isinstance(output, tuple) else output  # If tuple, the first is metric's value
+                            #logging.info(f"{metric_name} for {anon_name}: {metric_results[anon_name]}") #TODO: Check if remove this or store the results after each metric
+                
+                # Save results
+                results[metric_name] = metric_results
+                if not partial_eval_func is None: # TODO: Check if preserve this if
+                    if not results_file_path is None:
+                        self._write_into_results(results_file_path, [metric_name]+list(metric_results.values()))
+                
+                # Show results all together for easy comparison
+                msg = f"Results for {metric_name}:"
+                if partial_eval_func is None:
+                    logging.info("All None because metric name is invalid")
+                else:
+                    for name, value in results[metric_name].items():
+                        msg += f"\n\t\t\t\t\t{name}: {value}"
+                    logging.info(msg)
             
-            # Save results
-            results[metric_name] = metric_results
-            if not partial_eval_func is None: # TODO: Check if preserve this if
-                if not results_file_path is None: #TODO: CSV is maybe a bad format for complex results such as those from recall_per_entity_type. Is JSON better instead? (worse for Excel)
-                    self._write_into_results(results_file_path, [metric_name]+list(metric_results.values()))
-            
-            # Show results all together for easy comparison
-            msg = f"Results for {metric_name}:"
-            for name, value in results[metric_name].items():
-                msg += f"\n\t\t\t\t\t{name}: {value}" #TODO: Check these tabs
-            logging.info(msg)
+            except Exception as e:
+                logging.error(f"Exception in metric {metric_name}: {e}")
         
         return results
 
@@ -906,7 +1009,7 @@ class TAE:
         for name, parameters in metrics.items():
             metric_key = name.split("_")[0]
             if not metric_key in METRIC_NAMES:
-                logging.warning(f"Metric {metric_key} (from {name}) is unknown, therefore its results will be None | Options: {METRIC_NAMES}") #TODO: Maybe this can become an logging.error after testing
+                logging.warning(f"Metric {metric_key} (from {name}) is unknown, therefore its results will be None | Options: {METRIC_NAMES}")
             elif name in METRICS_REQUIRING_GOLD_ANNOTATIONS and self.gold_annotations_ratio < 1:
                 raise RuntimeError(f"Metric {name} depends on gold annotations, but these are not present for all documents (only for a {self.gold_annotations_ratio:.3%})")
 
@@ -1018,7 +1121,7 @@ class TAE:
     #region TRIR
 
     def get_TRIR(self, anonymizations:Dict[str, List[MaskedDocument]],
-                 background_knowledge_file_path:str, output_folder_path:str, #TODO: Maybe, autogenerate output_folder_path
+                 background_knowledge_file_path:str, output_folder_path:str,
                  verbose:bool=True, **kwargs) -> Dict[str, float]: #TODO: Add verbose to each metric
         """
         Calculates the Text Re-Identification Risk (TRIR) for given anonymizations, simulating a re-identification attack on the same basis as record linkage.
@@ -1046,11 +1149,10 @@ class TAE:
         for doc_id, bk in bk_dict.items():
             doc_dict = corpora.get(doc_id, {})
             doc_dict[BACKGROUND_KNOWLEDGE_KEY] = bk
-            corpora[doc_id] = doc_dict #TODO: Test with BK that are supersets
+            corpora[doc_id] = doc_dict
 
         # Create dataframe from corpora
-        dataframe = pd.DataFrame.from_dict(list(corpora.values())) #TODO: Why results change when compared with original TRI?
-        #dataframe.to_json("dataframe.json", orient="records") #TODO: Remove this
+        dataframe = pd.DataFrame.from_dict(list(corpora.values())) #TODO: Why results change when compared with original TRI? dataframe.to_json("dataframe.json", orient="records")
 
         # Create and run TRI
         tri = TRI(
@@ -1077,7 +1179,6 @@ class TAE:
 
     #region Precision
     
-    #TODO: Make a per-entity version
     def get_precision(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=None,
                       weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH,
                       token_level:bool=PRECISION_TOKEN_LEVEL) -> float:
@@ -1185,7 +1286,7 @@ class TAE:
             weighting_model_name (Optional[str]): Name of the model for `ICTokenWeighting`. If None, uniform weighting is used (not intended for this metric).
             weighting_max_segment_length (int): Maximum segment length for `ICTokenWeighting`.
             term_alterning (Union[int,str]): Parameter for term alternation in IC calculation.
-                It can be an integer (e.g., N = 6) or the string "sentence." 
+                It can be an integer (e.g., N = 6) or the string "sentence" 
                 When using an integer N, one of the N terms will be masked each round.
                 A larger N value implies a more accurate IC estimation (up to a certain point), but slower computation because more rounds are required.
                 If "sentence" is used, the text will be split into sentences, and one of the sentence terms will be masked at each round.
@@ -1271,7 +1372,7 @@ class TAE:
             weighting_model_name (Optional[str]): Name of the model for `ICTokenWeighting`. If None, uniform weighting is used.
             weighting_max_segment_length (int): Maximum segment length for `ICTokenWeighting`.
             term_alterning: Parameter for term alternation in IC calculation.
-                It can be an integer (e.g., N = 6) or the string "sentence." 
+                It can be an integer (e.g., N = 6) or the string "sentence" 
                 When using an integer N, one of the N terms will be masked each round.
                 A larger N value implies a more accurate IC estimation (up to a certain point), but slower computation because more rounds are required.
                 If "sentence" is used, the text will be split into sentences, and one of the sentence terms will be masked at each round.
@@ -1438,20 +1539,26 @@ class TAE:
 
     def _get_ICs(self, spans:List[Tuple[int, int]], doc:Document, term_alterning:int, token_weighting:TokenWeighting) -> np.ndarray:
         spans_IC = np.empty(len(spans))
-        if isinstance(term_alterning, int) and term_alterning > 1: # N-Term Alterning
+
+        # N-Term Alterning (N-TA)
+        if isinstance(term_alterning, int) and term_alterning > 1: 
             # Get ICs by masking each N term at a time, with all the document as context
-            for i in range(term_alterning):
-                spans_for_IC = spans[i::term_alterning]
-                spans_IC[i::term_alterning] = self._get_spans_ICs(spans_for_IC, doc, token_weighting)
+            spans_batch = [spans[i::term_alterning] for i in range(term_alterning)]
+            batch_ICs = self._get_spans_ICs_batch(spans_batch, doc, token_weighting)
+            for i in range(term_alterning): # Reconstruct the original order
+                spans_IC[i::term_alterning] = batch_ICs[i]
         
-        elif isinstance(term_alterning, str) and term_alterning.lower() == "sentence": # Sentence-Term Alterning
+        # Sentence-Term Alterning (S-TA)
+        elif isinstance(term_alterning, str) and term_alterning.lower() == "sentence":
             # Get ICs by masking 1 term of each sentence at a time, with the sentence as context
             # Get sentences spans
             sentences_spans = [[sent.start_char, sent.end_char] for sent in doc.spacy_doc.sents]
+            
             # Iterate sentences
             ini_span_idx = 0
             for sentence_span in sentences_spans:
                 sentence_start, sentence_end = sentence_span
+
                 # Get spans in the sentence
                 span_idx = ini_span_idx
                 first_sentence_span_idx = -1
@@ -1468,23 +1575,36 @@ class TAE:
                     # Otherwise, go to next span
                     else:
                         span_idx += 1
-                spans_for_IC = spans[first_sentence_span_idx:span_idx]
-                # Update initial span index for sentece's spans searching
-                ini_span_idx = span_idx
+
+                # Update initial span index for sentence spans searching
+                ini_span_idx = span_idx                         
+
                 # Get IC for each span of the sentence
-                for span in spans_for_IC:
-                    original_info, masked_info, n_masked_terms = self._get_spans_ICs(doc, [span], doc,
-                                                                                     token_weighting, context_span=sentence_span)
-                    original_doc_info += original_info
-                    masked_doc_info += masked_info
-                    total_n_masked_terms += n_masked_terms
+                spans_for_IC = spans[first_sentence_span_idx:span_idx]
+                spans_batch = [[span] for span in spans_for_IC]
+                batch_ICs = self._get_spans_ICs_batch(spans_batch, doc, token_weighting,
+                                                      context_span=sentence_span)
+                for i in range(len(spans_for_IC)):
+                    spans_IC[first_sentence_span_idx+i] = batch_ICs[i][0]
         else:
             raise RuntimeError(f"Term alterning {term_alterning} is invalid. It must be an integer greater than 1 or \"sentence\".")
 
         return spans_IC
-    
-    def _get_spans_ICs(self, spans: List[Tuple[int,int]], doc:Document, token_weighting: TokenWeighting,
-                        context_span:Optional[Tuple[int,int]]=None) -> np.ndarray:
+
+    def _get_spans_ICs_batch(self, spans_groups:List[List[Tuple[int,int]]], doc:Document, 
+                        token_weighting:TokenWeighting, context_span:Optional[Tuple[int,int]] = None) -> List[np.ndarray]:
+        """
+        Obtains the ICs of a batch of spans using batched `token_weighting`.
+        
+        Args:
+            spans_groups: List of span groups, where each group contains spans to process together
+            doc: Document object
+            token_weighting: TokenWeighting instance
+            context_span: Optional context span, defaults to entire document
+            
+        Returns:
+            List of numpy arrays, one for each spans group
+        """
         # By default, context span is all the document
         if context_span is None:
             context_span = (0, len(doc.text))
@@ -1493,15 +1613,23 @@ class TAE:
         context_start, context_end = context_span
         context = doc.text[context_start:context_end]
 
-        # Adjust spans to the context
-        in_context_spans = []
-        for (start, end) in spans:
-            in_context_spans.append((start - context_start, end - context_start))
+        # Prepare batch inputs
+        batch_contexts = []
+        batch_spans = []
+        
+        for spans_group in spans_groups:
+            # Adjust spans to the context for this group
+            in_context_spans = []
+            for (start, end) in spans_group:
+                in_context_spans.append((start - context_start, end - context_start))
+            
+            batch_contexts.append(context)
+            batch_spans.append(in_context_spans)
 
-        # Obtain the weights (Information Content) of each word
-        ICs = token_weighting.get_weights(context, in_context_spans)
-
-        return ICs
+        # Process all groups in a single batch call
+        batch_ICs = token_weighting.get_weights_batched_optimized(batch_contexts, batch_spans)
+        
+        return batch_ICs
     
     def _get_embedding_func(self, sim_model_name:str) -> Tuple:
         embedding_model = None
