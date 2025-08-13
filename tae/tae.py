@@ -404,9 +404,10 @@ class TAE:
 
         # Load background knowledge and add it to the corpora
         with open(background_knowledge_file_path, "r", encoding="utf-8") as f:
-            bk_dict = json.load(f)        
+            bk_dict = json.load(f)
         for doc_id, bk in bk_dict.items():
             doc_dict = corpora.get(doc_id, {})
+            doc_dict[DOC_ID_KEY] = doc_id
             doc_dict[BACKGROUND_KNOWLEDGE_KEY] = bk
             corpora[doc_id] = doc_dict
 
