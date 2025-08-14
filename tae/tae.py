@@ -72,7 +72,8 @@ NMI_REMOVE_MASK_MARKS = True
 NMI_N_CLUSTERINGS = 5
 NMI_N_TRIES_PER_CLUSTERING = 50
 
-# TRIR default settings are defined in the TRI class (in tri.py file)
+# Most of TRIR default settings are defined in the TRI class (in the tri.py file)
+BACKGROUND_KNOWLEDGE_KEY = "background_knowledge" # For TRIR background knowledge dataframe
 
 #endregion
 

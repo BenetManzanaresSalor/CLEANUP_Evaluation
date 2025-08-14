@@ -44,10 +44,9 @@ IDENTIFIER_TYPES = [INDENTIFIER_TYPE_DIRECT,
 #region General
 
 SPACY_MODEL_NAME = "en_core_web_md"
-IC_WEIGHTING_MODEL_NAME = "google-bert/bert-base-uncased" #TODO: Update this and all other models
+IC_WEIGHTING_MODEL_NAME = "google-bert/bert-base-uncased"
 IC_WEIGHTING_MAX_SEGMENT_LENGTH = 100
 IC_WEIGHTING_BATCH_SIZE = 128
-BACKGROUND_KNOWLEDGE_KEY = "background_knowledge" # For TRIR background knowledge file
 
 # POS tags, tokens or characters that can be ignored scores 
 # (because they do not carry much semantic content, and there are discrepancies

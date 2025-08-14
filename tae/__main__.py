@@ -53,7 +53,7 @@ if __name__ == "__main__":
 
     #region Initialization
 
-    logging.info(f"Selected device: {DEVICE}") #TODO: Check this print
+    logging.info(f"Selected device: {DEVICE}")
 
     # Create TAE from corpus
     corpus_file_path = config[CORPUS_CONFIG_KEY]
