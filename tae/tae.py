@@ -510,7 +510,7 @@ class TAE:
             precision = weighted_true_positives / weighted_system_masks
         else:
             precision = 0
-            if verbose: logging.warning("Zero detected identifiers, resulting in a precision of zero")
+            if verbose: logging.warning("There are no masked spans, resulting in a precision of zero")
         
         return precision
 

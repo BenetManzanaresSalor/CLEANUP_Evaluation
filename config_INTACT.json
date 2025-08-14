@@ -1,0 +1,68 @@
+{
+    "corpus_file_path": "data/tab/corpora/TAB_test_Corpus.json",
+    "anonymizations": {
+        "Manual_Supression":"data/tab/anonymizations/TAB_test_Manual_Supression.json",
+        "Manual_Entity":"data/tab/anonymizations/TAB_test_Manual_Entity.json",
+        "Manual_Dou_3_Random":"data/tab/anonymizations/TAB_test_Manual_Dou_3_Random.json",
+        "Manual_Presidio_gpt-3.5-turbo":"data/tab/anonymizations/TAB_test_Manual_Presidio_gpt-3.5-turbo-0125.json",
+        "Manual_INTACT_202408_least_specific":"data/tab/anonymizations/TAB_test_Manual_INTACT_202408_least_specific.json",
+        "Manual_INTACT_202408_most_specific":"data/tab/anonymizations/TAB_test_Manual_INTACT_202408_most_specific.json",
+        "Manual_INTACT_202408_selected":"data/tab/anonymizations/TAB_test_Manual_INTACT_202408_selected.json",
+        "Manual_INTACT_llama3_least_specific":"data/tab/anonymizations/TAB_test_Manual_INTACT_llama3_least_specific.json",
+        "Manual_INTACT_llama3_most_specific":"data/tab/anonymizations/TAB_test_Manual_INTACT_llama3_most_specific.json",
+        "Manual_INTACT_llama3_selected":"data/tab/anonymizations/TAB_test_Manual_INTACT_llama3_selected.json",
+        "Manual_INTACT_llama3.1_selected":"data/tab/anonymizations/TAB_test_Manual_INTACT_llama3.1_least_specific.json",
+        "Manual_INTACT_llama3.1_least_specific":"data/tab/anonymizations/TAB_test_Manual_INTACT_llama3.1_least_specific.json",
+        "Manual_INTACT_llama3.1_most_specific":"data/tab/anonymizations/TAB_test_Manual_INTACT_llama3.1_most_specific.json"
+    },
+    "results_file_path": "outputs/results_INTACT.csv",
+    "metrics":{
+        "_TRIR":{
+            "output_folder_path": "outputs/TAB/INTACT_TRI_testdev",
+            "background_knowledge_file_path": "data/tab/bks/TAB_testdev_BK=Public10%.json",
+            "use_document_curation": true,
+            "anonymize_background_knowledge": true,
+            "load_saved_pretreatment": true,
+            "add_non_saved_anonymizations": true,
+            "save_pretreatment": true,
+            "load_saved_pretraining": true,
+            "load_saved_finetuning": true,
+            "save_finetuning":true
+        },      
+        "NMI_bert":{
+            "embedding_model_name":"bert-base-cased",
+            "remove_mask_marks":false
+        },
+        "_NMI":{
+            "remove_mask_marks":false
+        },
+        "_TPS": {},
+        "_TRIR_full":{
+            "output_folder_path": "outputs/WikiActors/50_eval",
+            "background_knowledge_file_path": "TO BE DEFINED",
+            "load_saved_pretreatment": true,
+            "add_non_saved_anonymizations": true,
+            "anonymize_background_knowledge": true,
+            "only_use_anonymized_background_knowledge": false,
+            "use_document_curation": true,
+            "save_pretreatment": true,
+            "load_saved_finetuning": true,
+            "base_model_name": "distilbert-base-uncased",
+            "tokenization_block_size":250,
+            "use_additional_pretraining": true,
+            "save_additional_pretraining": true,
+            "load_saved_pretraining": true,
+            "pretraining_epochs": 3,
+            "pretraining_batch_size": 8,
+            "pretraining_learning_rate": 5e-05,
+            "pretraining_mlm_probability": 0.15,
+            "pretraining_sliding_window": "512-128",
+            "finetuning_epochs": 15,
+            "finetuning_batch_size": 16,
+            "finetuning_learning_rate": 5e-05,
+            "finetuning_sliding_window": "100-25",
+            "save_finetuning": true,
+            "verbose": false
+        }
+    }   
+}
