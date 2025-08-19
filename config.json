@@ -1,60 +1,39 @@
 {
-    "corpus_file_path": "data/tab/corpora/TAB_test_Corpus.json",
+    "corpus": "data/tab/corpora/TAB_test_Corpus.json",
     "anonymizations": {
-        "St.NER3":"data/tab/anonymizations/TAB_test_St.NER3.json",
-        "St.NER4":"data/tab/anonymizations/TAB_test_St.NER4.json",
-        "St.NER7":"data/tab/anonymizations/TAB_test_St.NER7.json",
-        "spaCy":"data/tab/anonymizations/TAB_test_spaCy.json",
-        "Presidio_Supression_Ildikó":"data/tab/anonymizations/TAB_test_Presidio_Supression_Ildikó.json",
-        "Presidio_Entity_Ildikó":"data/tab/anonymizations/TAB_test_Presidio_Entity_Ildikó.json",
-        "Presidio_Entity":"data/tab/anonymizations/TAB_test_Presidio_Entity.json",
-        "Presidio_Transformers_Entity":"data/tab/anonymizations/TAB_test_Presidio_transformers_Entity.json",
-        "MvM-gpt-3.5-turbo":"data/tab/anonymizations/TAB_test_gpt-3.5-turbo-0125_mvm-st.json",
+        "St.NER3":"data/tab/anonymizations/TAB_test_St.NER3_Entity.json",
+        "St.NER4":"data/tab/anonymizations/TAB_test_St.NER4_Entity.json",
+        "St.NER7":"data/tab/anonymizations/TAB_test_St.NER7_Entity.json",
+        "spaCy":"data/tab/anonymizations/TAB_test_spaCy_Entity.json",
+        "Presidio":"data/tab/anonymizations/TAB_test_Presidio_Entity.json",
         "Manual_Supression":"data/tab/anonymizations/TAB_test_Manual_Supression.json",
         "Manual_Entity":"data/tab/anonymizations/TAB_test_Manual_Entity.json",
-        "Manual_Presidio_GPT":"data/tab/anonymizations/TAB_test_Manual_Presidio_gpt-3.5-turbo-0125.json",
-        "Manual_Dou":"data/tab/anonymizations/TAB_test_Manual_Dou.json",
         "Manual_INTACT":"data/tab/anonymizations/TAB_test_Manual_INTACT.json"
     },
     "results_file_path": "outputs/results.csv",
     "metrics":{
         "Precision":{},
-        "PrecisionWeighted":{},
+        "PrecisionWeighted":{},        
+        "TPI": {},
+        "TPS": {},
+        "NMI": {},
         "Recall": {},
         "RecallPerEntityType":{},
-        "TPI": {},
-        "_TPS": {},
-        "NMI": {},
-        "_NMI_minilm":{
-            "embedding_model_name":"all-MiniLM-L6-v2"
-        },
-        "_NMI_mpnet":{
-            "embedding_model_name":"all-mpnet-base-v2"
-        },
-        "_NMI_bert":{
-            "embedding_model_name":"bert-base-cased"
-        },
-        "_TRIR":{
-            "output_folder_path": "outputs/WikiActors/50_eval",
+        "TRIR":{
+            "output_folder_path": "outputs/tab/TAB_test_BK=Public",
             "background_knowledge_file_path": "data/tab/bks/TAB_test_BK=Public.json",
-            "use_document_curation": true,
-            "anonymize_background_knowledge": true
-        },
-        "_TRIR_full":{
-            "output_folder_path": "outputs/WikiActors/50_eval",
-            "background_knowledge_file_path": "TO BE DEFINED",
-            "load_saved_pretreatment": true,
+            "load_saved_pretreatment": false,
             "add_non_saved_anonymizations": true,
             "anonymize_background_knowledge": true,
             "only_use_anonymized_background_knowledge": false,
             "use_document_curation": true,
             "save_pretreatment": true,
-            "load_saved_finetuning": true,
+            "load_saved_finetuning": false,
             "base_model_name": "distilbert-base-uncased",
             "tokenization_block_size":250,
             "use_additional_pretraining": true,
             "save_additional_pretraining": true,
-            "load_saved_pretraining": true,
+            "load_saved_pretraining": false,
             "pretraining_epochs": 3,
             "pretraining_batch_size": 8,
             "pretraining_learning_rate": 5e-05,

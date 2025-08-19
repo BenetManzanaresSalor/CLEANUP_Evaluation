@@ -11,7 +11,7 @@ from .tae import TAE
 #region Constants
 
 # Configuration dictionary keys
-CORPUS_CONFIG_KEY = "corpus_file_path"
+CORPUS_CONFIG_KEY = "corpus"
 ANONYMIZATIONS_CONFIG_KEY = "anonymizations"
 RESULTS_CONFIG_KEY = "results_file_path"
 METRICS_CONFIG_KEY = "metrics"
@@ -46,7 +46,7 @@ if __name__ == "__main__":
     
     for key in MANDATORY_CONFIG_KEYS:
         if not key in config.keys():
-            raise RuntimeError(f"Configuration JSON file misses mandatory key: {key}")
+            raise RuntimeError(f"Configuration JSON file misses a mandatory key: {key}")
     
     #endregion
 
