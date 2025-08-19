@@ -109,8 +109,8 @@ class MaskedDocument:
         masked_text = ""+original_text
         
         for (start_idx, end_idx), replacement in zip(reversed(self.masked_spans), reversed(self.replacements)):
-            if replacement is None: # If there is no replacement, use first masking mark
-                replacement = MASKING_MARKS[0]
+            if replacement is None: # If there is no replacement, use an empty string
+                replacement = ""
             masked_text = masked_text[:start_idx] + replacement + masked_text[end_idx:]
         
         return masked_text

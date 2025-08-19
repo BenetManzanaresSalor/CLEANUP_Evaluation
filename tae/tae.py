@@ -230,7 +230,7 @@ class TAE:
                                 
                     # Save results
                     results[metric_name] = metric_results
-                    if not results_file_path is None:
+                    if results_file_path:
                         self._write_into_results(results_file_path, [metric_name]+list(metric_results.values()))
                     
                     # Show results all together for easy comparison

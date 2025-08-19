@@ -5,14 +5,14 @@
   <img src="https://img.shields.io/badge/Linux_based-Compatible_but_not_tested-lightgrey" alt="Compatible but not tested on Linux-based systems"/> #TODO: Test on Ubuntu
 </p>
 
-This repository contains the code and experimental data for the **Text Anonymization Evaluator** (TAE), an evaluation tool for text anonymization including multiple state-of-the-art utility and privacy metrics.
+This repository contains the code and experimental data for the **Text Anonymization Evaluator** (TAE), an evaluation tool for text anonymization including multiple state-of-the-art metrics for both utility preservation and privacy protection.
 
 Experimental data was extracted from the [text-anonymization-benchmark](https://github.com/NorskRegnesentral/text-anonymization-benchmark) repository, corresponding to the publication [Pilán, I., Lison, P., Øvrelid, L., Papadopoulou, A., Sánchez, D., & Batet, M., The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization, Computational Linguistics, 2022](https://aclanthology.org/2022.cl-4.19/). The exact data files utilized are located in the [data](data) folder.
 
 
 
 
-## Table of Contents
+## Table of contents
 * [Project structure](#project-structure)
 * [Install](#install)
   * [From source](#from-source)
@@ -21,6 +21,20 @@ Experimental data was extracted from the [text-anonymization-benchmark](https://
   * [From CLI](#from-cli)
   * [From code](#from-code)
 * [Configuration](#configuration)
+  * [Corpus](#corpus)
+  * [Anonymizations](#anonymizations)
+  * [Metrics](#metrics)
+    * [Utility preservation](#utility-preservation)
+      * [Precision](#precision)
+      * [PrecisionWeighted](#precisionweighted)
+      * [TPI](#tpi)
+      * [TPS](#tps)
+      * [NMI](#nmi)
+    * [Privacy protection](#privacy-protection)
+      * [Recall](#recall)
+      * [RecallPerEntityType](#recallperentitytype)
+      * [TRIR](#trir)
+  * [Results](#results)
 
 
 
@@ -144,6 +158,7 @@ This assumes that you have TAE ready to import. That is trivial if you have inst
 The package allows to configure the corpus, anonymizations, metrics and results filepath to use. As specified in the [Usage section](#usage-examples), this can be done using a JSON configuration file (*e.g.*, [config.json](config.json)) or directly from code (as shown in the [from code section](#from-code)).
 Subsections below detail all the parameters for each of the concepts, including input and output files format.
 
+
 ## Corpus
 * `corpus | String`: Path to the JSON corpus file, defining the set of documents that need to be protected.
   This parameter can be provided either through the JSON configuration file if running [from CLI](#from-cli), or using the `TAE` constructor if running [from code](#from-code).
@@ -183,7 +198,7 @@ Subsections below detail all the parameters for each of the concepts, including 
         }
         ```
 
-*NOTE: When using the `TAE` constructor from code, `corpus` can also be the list of dictionaries directly, rather than a path to a JSON file containing it. In this way, data load from disk can be reduced.*
+*NOTE: When using the `TAE` constructor [from code](#from-code), `corpus` can also be the list of dictionaries directly, rather than a path to a JSON file containing it. In this way, data load from disk can be reduced.*
 
 
 ## Anonymizations
@@ -194,30 +209,34 @@ Subsections below detail all the parameters for each of the concepts, including 
   * *keys* are the anonymization names (*e.g.*, `"Presidio"`).
   * *values* are paths to JSON anonymization files.
   
-  Each anonymization file must follow the structure of [TAB_test_Manual_Entity.json](data/tab/anonymizations/TAB_test_Manual_Entity.json). Specifically, it should contain a dictionary where:
-    * *key* is the `doc_id`, matching the one used in the corpus.
-    * *value* is the *maskings list* for that document. The *maskings list* consists of tuples (represented as lists in JSON) containing **two or three elements**:
-      1. `start_offset | Integer`: Index of the first (included) character in the `text` corresponding to this masking.
-      2. `end_offset | Integer`: Index of the last (not included) character in the `text` corresponding to this masking.
-      3. `replacement | String (Optional)`: Text replacement for this masking. It can be any length. This third element can be neglected for some or all maskings, what would be equivalent to supression-based masking (replacing by an empty string).
+    Each anonymization file must follow the structure such as that of [TAB_test_Manual_Entity.json](data/tab/anonymizations/TAB_test_Manual_Entity.json). Specifically, it should contain a dictionary where:
+      * *key* is the `doc_id`, matching the one used in the `corpus`.
+      * *value* is the *maskings list* for that document. The *maskings list* consists of tuples (represented as lists in JSON) containing **two or three elements**:
+        1. `start_offset | Integer`: Index of the first (included) character in the `text` corresponding to this masking. Should be coherent with the `text` in the `corpus`.
+        2. `end_offset | Integer`: Index of the last (not included) character in the `text` corresponding to this masking. Should be coherent with the `text` in the `corpus`.
+        3. `replacement | String (Optional)`: Text replacement for this masking. It can be any length. It can be neglected for some or all maskings, what would be equivalent to supression-based masking.
 
-    The following JSON block illustrates the structure of an anonymization file for a single document, with one replacement-based masking and one suppression-based masking:
-    ```json
-    {
-      "001-61807": [
-        [2956, 2974, "a legal authority"],
-        [2940, 2951]
-      ]
-    }
-    ```
+      The following JSON block illustrates the structure of an anonymization file for a single document, with one replacement-based masking and one suppression-based masking:
+      ```json
+      {
+        "001-61807": [
+          [2956, 2974, "a legal authority"],
+          [2940, 2951]
+        ]
+      }
+      ```
 
-*NOTE: When using the `evaluate` function from code, the `anonymizations` argument can also be a list of `MaskedDocument` or a `MaskedCorpus` (i.e., dataclasses defined in [utils.py](tae/utils.py)). In this way, data load from disk can be reduced.*
+*NOTE: When using the `TAE.evaluate` function [from code](#from-code), anonymizations files can also be a list of `MaskedDocument` or a `MaskedCorpus` (i.e., dataclasses defined in [utils.py](tae/utils.py)) directly. In this way, data load from disk can be reduced.*
+
 
 ## Metrics
+* `metrics | Dictionary`: Specification of all the evaluation metrics to apply.
 
 ### Utility preservation
 
 #### Precision
+
+#### PrecisionWeighted
 
 #### TPI
 
@@ -236,6 +255,15 @@ Subsections below detail all the parameters for each of the concepts, including 
 
 
 ## Results
+* `results_file_path | String`: Path for the CSV results file. 
+  This parameter can be provided either through the JSON configuration file [from CLI](#from-cli), or using the `TAE.evaluate` function if running [from code](#from-code).
+
+  During the `TAE.evaluate` execution, obtained results will be appended to this CSV file, previously creating the file and the folders containing it if they are missing. The file follows the next format:
+  * *Header*:
+  * *Metric result*:
+  #TODO: Add example table(?)
+
+*NOTE: When running [from code](#from-code), the `TAE.evaluate` function returns the results in dictionary, keys being the metric name and values being another dictionary mapping anonymization names to the obtained values.*
 
 
 
@@ -253,7 +281,7 @@ Subsections below detail all the parameters for each of the concepts, including 
 
     | name            | public_knowledge                                 | Method1                                                  | Method2                                            |
     |-----------------|--------------------------------------------------|------------------------------------------------------------------------|------------------------------------------------------------------|
-    | Joe Bean      | Popular tweet: I built my own fortune!           | Bean received funding from his family to found ORG. | PERSON received funding from DEM to found  UnderPants.      |
+    | Joe Bean      | Popular tweet: I built my own fortune!           | Bean received funding from his family to found ORG. | PERSON received funding from DEM to found UnderPants.      |
     | Ebenezer Lawson | Evebezer Lawson is a popular writer from Kansas. | PERSON, born in LOCATION, has written multiple best-sellers.            | Lawson, born in Kansas, has MISC multiple MISC.                   |
     | Ferris Knight   | NaN                                              | After a long race, PERSON managed to obtain the first position.        | After a EVENT, PERSON managed to obtain the first position. |
 
