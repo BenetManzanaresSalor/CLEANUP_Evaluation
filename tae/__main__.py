@@ -55,21 +55,16 @@ if __name__ == "__main__":
 
     logging.info(f"Selected device: {DEVICE}")
 
-    # Create TAE from corpus
-    corpus_file_path = config[CORPUS_CONFIG_KEY]
-    tae = TAE.from_file_path(corpus_file_path)
+    # Create TAE from corpus file path
+    tae = TAE(config[CORPUS_CONFIG_KEY])
 
-    # Create anonymizations
-    anonymizations = {}
-    anonymizations_config = config[ANONYMIZATIONS_CONFIG_KEY]
-    for anon_name, anon_file_path in anonymizations_config.items():
-        masked_docs = MaskedCorpus(anon_file_path)
-        anonymizations[anon_name] = masked_docs
+    # Get anonymizations file paths
+    anonymizations = config[ANONYMIZATIONS_CONFIG_KEY]
     
     # Get metrics
     metrics = config[METRICS_CONFIG_KEY]
 
-    # Get file_path for results CSV file
+    # Get file path for the results CSV file
     results_file_path = config[RESULTS_CONFIG_KEY]
 
     #endregion

@@ -2,7 +2,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-orange" alt="License on Windows 11"/>
   <img src="https://img.shields.io/badge/Windows%2011-Working-ok" alt="Working on Windows 11"/>
-  <img src="https://img.shields.io/badge/Linux_based-Compatible_but_not_tested-lightgrey" alt="Compatible but not tested on Linux-based systems"/>
+  <img src="https://img.shields.io/badge/Linux_based-Compatible_but_not_tested-lightgrey" alt="Compatible but not tested on Linux-based systems"/> #TODO: Test on Ubuntu
 </p>
 
 This repository contains the code and experimental data for the **Text Anonymization Evaluator** (TAE), an evaluation tool for text anonymization including multiple state-of-the-art utility and privacy metrics.
@@ -74,7 +74,7 @@ If you want to use TAE from CLI (see [Usage section](#usage-examples) for detail
             ```console
             conda activate ENVIRONMENT_NAME
             ```
-    * Option B: Using Pip (this uses the pyproject.toml file)
+    * Option B: Using Pip (this uses the pyproject.toml file) #TODO: Fully test this
         ```console
         pip install -e .
         ```
@@ -105,26 +105,21 @@ This assumes that the current working directory contains the [tae](tae) package 
 
 
 ## From code
-Running from code requires to create an instance of the TAE class (defined in the [tae.py](tae/tae.py) script) passing the desired configuration as arguments. This configuration is constituted by the corpus, anonymizations, metrics and results filepath to use (check the [Configuration section](#configuration) for details). That is exactly the same as for the JSON configuration file mentioned in the [from CLI section](#from-cli), but defined by code.
+Running from code requires creating an instance of the `TAE` class (defined in [tae.py](tae/tae.py)), passing the desired configuration as arguments. This includes the corpus, anonymizations, metrics, and results filepath (see the [Configuration section](#configuration) for details). The setup is equivalent to using a JSON configuration file [from the CLI](#from-cli), but defined directly in code. Depending on the use case, running from code can help reduce the data load from disk.
 
-The following script exemplifies how to use 
+The following script exemplifies how to use TAE from code (very similar to what is done in [\_\_main\_\_.py](tae/__main__.py)):
 ```python
-from tae import TAE #TODO: Check if MaskedCorpus can be imported (and if there is a cleaner way)
-from tae import MaskedCorpus  # Convinient helper class for loading anonymizations
+from tae import TAE
 
 # Create TAE instance from the corpus file
-corpus_file_path = "data/tab/corpora/TAB_test_Corpus.json"
-tae = TAE.from_file_path(corpus_file_path)
+tae = TAE("data/tab/corpora/TAB_test_Corpus.json") #TODO: Limpiar de replacement_mistral y demás
 
 # Load anonymizations
-anonymizations_filepaths = { #TODO: Check anonymizations in repo, including Ildikó's versions
+anonymizations = { #TODO: Check anonymizations in repo, including Ildikó's versions
     "Presidio":"data/tab/anonymizaitons/TAB_test_Presidio_Entity.json", 
     "spaCy":"data/tab/anonymizaitons/TAB_test_spaCy_Entity.json",
     "Manual": "data/tab/anonymizaitons/TAB_test_Manual_Entity.json"
-} 
-anonymizations = {}
-for name, filepath in anonymizations_filepaths.items():
-    anonymizations[name] = MaskedCorpus(filepath)
+}
 
 # Define metrics dictionary
 metrics = {
@@ -146,19 +141,175 @@ This assumes that you have TAE ready to import. That is trivial if you have inst
 
 
 # Configuration
-The package allows to configure the corpus, anonymizations, metrics and results filepath to use. As exemplified in the [Usage section](#usage-examples), this can be done using a JSON file or directly from code.
-Subsections below detail all the parameters that can be specified for each of the concepts, including the format for input files.
+The package allows to configure the corpus, anonymizations, metrics and results filepath to use. As specified in the [Usage section](#usage-examples), this can be done using a JSON configuration file (*e.g.*, [config.json](config.json)) or directly from code (as shown in the [from code section](#from-code)).
+Subsections below detail all the parameters for each of the concepts, including input and output files format.
 
 ## Corpus
+* `corpus | String`: Path to the JSON corpus file, defining the set of documents that need to be protected.
+  This parameter can be provided either through the JSON configuration file if running [from CLI](#from-cli), or using the `TAE` constructor if running [from code](#from-code).
+  
+  The corpus file should follow a format such as that of [TAB_test_Corpus.json](data/tab/corpora/TAB_test_Corpus.json). That is, a list of dictionaries, with each dictionary corresponding to a document and containing at least these key-values:
+    * `doc_id | String`: Unique identifier of the document. For the [TRIR metric](#trir), this requires also to be unique for the individual to protect, so each individual is assumed to appear in only one document.
+    * `text | String`: Textual content of the document.
+    * `annotations | Dictionary (Optional)`: Manual annotations used for the [Precision](#precision), [PrecisionWeighted](#precision), [Recall](#recall) and [RecallPerEntityType](#recallperentitytype) metrics. Nevertheless, `annotations` can be ignored (*i.e.*, missing or assigned to `None`) if none of these metrics is used. 
+        * Each *key* of this dictionary corresponds to an annotator identifier (*e.g*, "annotator1" and "annotator2"), being possible to have one or more annotators per document.
+        * Each *value* of this dictionary is another dictionary containing `entity_mentions` as *key* and, as *value*, the list of all the entities mentioned in the text. Each entity mention in this list is defined by another dictionary, including at least the following key-values:
+            * `start_offset | Integer`: Index of the first (included) character in the `text` corresponding to this entity mention.
+            * `end_offset | Integer`: Index of the last (not included) character in the `text` corresponding to this entity mention.
+            * `entity_type | String`: Conceptual/semantic type of annotated entity (*e.g.*, "CODE", "PERSON", "DATETIME" or "ORG"). Used in [RecallPerEntityType](#recallperentitytype). The set of possible types can be defined freely.
+            * `identifier_type | String`: Indicates whether the entity is a "DIRECT" identifier (*i.e.*, allows to identify the individual to protect by itself), a "QUASI" identifier (*i.e.*, allows to identify the individual to protect in combination with other quasi-identifiers) or "NO_MASK" (*i.e.*, is not disclosive, so does not require any masking). 
+            * `entity_id | String`: Unique identifier of the entity, **not the particular mention**. The same entity (*e.g.*, "Edinburgh") can appear multiple times in the text, each time being a different mention, but with the same `entity_id`. This is used for entity-based [Precision](#precision), [PrecisionWeighted](#precision) and [Recall](#recall).        
+
+        The following JSON block exemplifies the `annotations` structure with a single entity mention:
+        ```json
+        {
+            "annotations": {
+                "annotator1": {
+                    "entity_mentions": [
+                        {
+                            "entity_type": "CODE",
+                            "entity_mention_id": "001-61807_a1_em1",
+                            "start_offset": 54,
+                            "end_offset": 62,
+                            "span_text": "36110/97",
+                            "edit_type": "check",
+                            "identifier_type": "DIRECT",
+                            "entity_id": "001-61807_a1_e1",
+                            "confidential_status": "NOT_CONFIDENTIAL"
+                        }
+                    ]
+                }
+            }
+        }
+        ```
+
+*NOTE: When using the `TAE` constructor from code, `corpus` can also be the list of dictionaries directly, rather than a path to a JSON file containing it. In this way, data load from disk can be reduced.*
 
 
 ## Anonymizations
+* `anonymizations | Dictionary`: Defines all anonymizations to be evaluated.
+  This parameter can be provided either through the JSON configuration file [from CLI](#from-cli), or using the `TAE.evaluate` function if running [from code](#from-code).
+  
+  Anonymizations are specified through a dictionary where:
+  * *keys* are the anonymization names (*e.g.*, `"Presidio"`).
+  * *values* are paths to JSON anonymization files.
+  
+  Each anonymization file must follow the structure of [TAB_test_Manual_Entity.json](data/tab/anonymizations/TAB_test_Manual_Entity.json). Specifically, it should contain a dictionary where:
+    * *key* is the `doc_id`, matching the one used in the corpus.
+    * *value* is the *maskings list* for that document. The *maskings list* consists of tuples (represented as lists in JSON) containing **two or three elements**:
+      1. `start_offset | Integer`: Index of the first (included) character in the `text` corresponding to this masking.
+      2. `end_offset | Integer`: Index of the last (not included) character in the `text` corresponding to this masking.
+      3. `replacement | String (Optional)`: Text replacement for this masking. It can be any length. This third element can be neglected for some or all maskings, what would be equivalent to supression-based masking (replacing by an empty string).
 
+    The following JSON block illustrates the structure of an anonymization file for a single document, with one replacement-based masking and one suppression-based masking:
+    ```json
+    {
+      "001-61807": [
+        [2956, 2974, "a legal authority"],
+        [2940, 2951]
+      ]
+    }
+    ```
+
+*NOTE: When using the `evaluate` function from code, the `anonymizations` argument can also be a list of `MaskedDocument` or a `MaskedCorpus` (i.e., dataclasses defined in [utils.py](tae/utils.py)). In this way, data load from disk can be reduced.*
 
 ## Metrics
+
+### Utility preservation
+
+#### Precision
+
+#### TPI
+
+#### TPS
+
+#### NMI
+
+
+### Privacy protection
+
+#### Recall
+
+#### RecallPerEntityType
+
+#### TRIR
 
 
 ## Results
 
 
+
+//////////////////////////////////////////////////////////////////////////////////////////////// FROM TRI ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+### Data
+* **Mandatory configurations (generally belonging to Data reading)**:
+  * **output_folder_path | String | MANDATORY**: Determines the folder were results will be stored (see [Results section](#results)). The folder will be created if it does not exist.
+  * **data_file_path | String | MANDATORY**: Path to the data file to use. That file is expected to define a Pandas dataframe stored in JSON or CSV format containing three types of columns:
+    * *Individual name*: One column with the names of all the individuals. Column named as defined in the `individual_name_column` setting. In the nomenclature of our method, this column allows to define both $A_I$ and $B_I$.
+    * *Background knowledge*: One column with the background knowledge (i.e., public document) available for each individual. Column named as defined in the `background_knowledge_column` setting. This will be used for training the re-identification attack. If a cell of this column is empty (e.g., `""`, `NaN`, `None` or `null`) it is considered that no background knowledge is available for the individual. In the nomenclature of our method, this column determines $B_D$, and all the individuals in the individual name column that have background knowledge define $B_I$.
+    * *Anonymized document set*: At least one column should be anonymized texts corresponding to the individuals. Each column represents the output of an anonymization method for documents related with the individual of the same row. The re-identification risk will be computed for each anonymizaiton methods so, since all of them are applied to the same documents, it allows to compare the privacy protection provided by the approaches. In the nomenclature of our method, this column determines $A_D$, and all the individuals in the individual name column with an anonymized document (instead of being empty) define $A_I$.
+
+    WARNING: A column for indexes (default when exporting from Pandas to CSV) will make the program fail, creating an "Unnamed" anonymized documents set containing numbers.  
+    Example of a dataframe with **three** individuals, each of them with background knowledge (except the last) and a document protected with **two** different anonymized methods (Method1 and Method2):
+
+    | name            | public_knowledge                                 | Method1                                                  | Method2                                            |
+    |-----------------|--------------------------------------------------|------------------------------------------------------------------------|------------------------------------------------------------------|
+    | Joe Bean      | Popular tweet: I built my own fortune!           | Bean received funding from his family to found ORG. | PERSON received funding from DEM to found  UnderPants.      |
+    | Ebenezer Lawson | Evebezer Lawson is a popular writer from Kansas. | PERSON, born in LOCATION, has written multiple best-sellers.            | Lawson, born in Kansas, has MISC multiple MISC.                   |
+    | Ferris Knight   | NaN                                              | After a long race, PERSON managed to obtain the first position.        | After a EVENT, PERSON managed to obtain the first position. |
+
+    Since no public knowledge has been provided for Ferris Knight, the TRI model will not have samples of her in the training set. Subsequently, it is expected to fail the re-identification of her anonymized texts, limiting the re-identification risk for Method1 and Method2 to 66.66%.
+
+  * **individual_name_column | String | MANDATORY**: Name of the dataframe column corresponding to the individual or organizaiton name. In the previous example, it will be `name`.
+  * **background_knowledge_column | String | MANDATORY**: Name of the column corresponding to the background knowledge document for each individual. In the previous example, it will be `public_knowledge`. The rest of columns not named as defined in `individual_name_column` or `background_knowledge_column` will be considered as texts anonymized with different methods (one method per column) for evaluating the re-identification risk.
+
+* **Load pretreatment**:
+  * **load_saved_pretreatment | Boolean | Default=true**: If the `Pretreated_Data.json` file exists in the `output_folder_path`, load that data instead of running the pretreatment. Disable it if you completely changed the `data_file_path`. It requires a previous execution with `save_pretreatment=true`.
+  * **add_non_saved_anonymizations | Boolean | Default=true**: When loading pretreatment data from `Pretreated_Data.json`, this setting checks whether the file at `data_file_path` includes new anonymizations that need to be processed. If new anonymizations are found, they are loaded and, if `use_document_curation` is true, only these new anonymizations will undergo curation. This option is particularly useful if you have added new anonymizations to the dataframe at `data_file_path` and want to avoid repeating the entire pretreatment.
+
+* **Data pretreatment**:
+  * **Anonymized background knowledge**:
+    * **ANONIMIZE_BACKGROUND_KNOWLEDGE | Boolean | Default=true**: If during document pretreatment generate an anonymized version of the background knowledge documents using [spaCy NER](https://spacy.io/api/entityrecognizer) that would be used along with the non-anonymized version. Its usage is strongly recommended, since it can significantly improve re-identification risks. As a counterpoint, it roughly duplicates the training samples, incrementing the training time and RAM consumsumption.
+    * **only_use_anonymized_background_knowledge | Boolean | Default=false**: If only using the anonymized version of the background knowledge, instead of concatenating it with the non-anonymized version. This usually results in higher re-identification risks than using only the non-anonymized version, but lower than using both (anonymized and non-anonymized). Created for an ablation study.
+  * **Document curation**:
+    * **use_document_curation | Boolean | Default=true**: Whether to perform the document curation, consisting of lemmatization and removing of stopwords and special characters. It is inexpensive compared to pretraining or finetuning.
+
+* **Save pretreatment**:
+  * **save_pretreatment | Boolean | Default=true**: Whether to save the data after pretreatment. A JSON file name `Pretreated_Data.json` will be generated and stored in the `output_folder_path` folder. As pretreatment it is also included the curation of new anonymizations caused by `updated_loaded_eval_pretreatment=true`.
+
+### Build classifier
+* **Load already trained TRI model**:
+  * **load_saved_finetuning | Boolean | Default=true**: If the `TRI_Pipeline` exists in the `output_folder_path` directory and contains the model file `model.safetensors`, load that already trained TRI model instead of running the additional pretraining and finetuning. It requires a previous execution with `save_finetuning=true`.
+* **Create base language model**:
+  * **base_model_name | String | Default="distilbert-base-uncased"**: Name of the base language model in the [HuggingFace's Transformers library](https://huggingface.co/docs/transformers/index) to be used for both additional pretraining and finetuning. Current code is designed for versions of BERT, DistilBERT and RoBERTa. Examples: "distilbert-base-uncased", "distilbert-base-cased", "bert-base-uncased", "bert-base-cased" and "roberta-base". The `ini_extended_model` method from the TRI class (in [tri.py](tri.py)) can be easily modified for other models.
+  * **tokenization_block_size | Integer | Default=250**: Number of data samples tokenized at once with [Transformers' tokenizer](https://huggingface.co/docs/transformers/en/main_classes/tokenizer). This is done for limiting and optimizing RAM usage when processing large datasets. The value of 250 is roughly optimized for 32GB of RAM.
+* **Additional pretraining**:
+  * **use_additional_pretraining | Boolean | Default=true**: Whether additional pre-training (i.e. Masked Language Modeling, MLM) is to be performed to the base language model. Its usage is recommended, since it is inexpensive (compared to finetuning) and can improve re-identification risks.
+  * **save_additional_pretraining | Boolean | Default=true**: Whether to save the additionally pretrained language model. The model will be saved as a PyTorch model file `Pretrained_Model.pt` in the `output_folder_path`.
+  * **load_saved_pretraining | Boolean | Default=true**: If `use_additional_pretraining` is true and the `Pretrained_Model.pt` file exists, loads that additionally pretrained base model instead of running the process. It requires a previous execution with `save_additional_pretraining=true`.
+  * **pretraining_epochs | Integer | Default=3**: Number of additional pretraining epochs.
+  * **pretraining_batch_size | Integer | Default=8**: Size of the batches for additional pretraining.
+  * **pretraining_learning_rate | Float | Default=5e-05**: Learning rate for the [AdamW optimizer](https://huggingface.co/docs/bitsandbytes/main/en/reference/optim/adamw) to use during additional pretraining.
+  * **pretraining_mlm_probability | Float | Default=0.15**: Probability of masking tokens by the [Data Collator](https://huggingface.co/docs/transformers/main_classes/data_collator#transformers.DataCollatorForLanguageModeling.mlm_probability) during the additional pretraining with MLM.
+  * **pretraining_sliding_window | String | Default="512-128"**: Sliding window configuration for additional pretraining. Since input documents are assumed to be longer than the maximum number of tokens processable by the language model (maximum sequence length), the text is split into multiple samples. A sliding window mechasim has been implemented, defined by the size of the window and the overlap with the previous window. For instance, use "512-128" for samples/splits of 512 tokens and an overlap of 128 tokens with the previous split/sample. Alternatevely, if "No" is used, one sample/split per sentence will be created, leveraging that sentences are generally shorter than the model maximum sequence length. Reducing the window size and/or incrementing the overlap will result in more samples/splits, what increments the training time.
+* **Finetuning**:
+  * **finetuning_epochs | Integer | Default=15**: Number of epochs to perform during the finetuning.
+  * **finetuning_batch_size | Integer | Default=16**: Size of the batches for finetuning.
+  * **finetuning_learning_rate | Float | Default=5e-05**: Learning rate for the [AdamW optimizer](https://huggingface.co/docs/bitsandbytes/main/en/reference/optim/adamw) to use during finetuning.
+  * **finetuning_sliding_window | String | Default="100-25"**: Sliding window configuration for finetuning. Since input documents are assumed to be longer than the maximum number of tokens processable by the language model (maximum sequence length), the text is split into multiple samples. A sliding window mechasim has been implemented, defined by the size of the window and the overlap with the previous window. For example, use "512-128" for samples/splits of 512 tokens and an overlap of 128 tokens with the previous split/sample. Alternatevely, if "No" is used, one sample/split per sentence will be created, leveraging that sentences are generally shorter than the model maximum sequence length. Reducing the window size and/or increasing the overlap will result in more samples/splits, what increments the training time.
+  * **dev_set_column_name | String | Default=false**: Specifies the column name to be used for model selection. If set to `false` (boolean, not string), the model with the highest average accuracy across all anonymization sets will be selected as the final model. If a column name is provided, the accuracy corresponding to that specific anonymization from the dataframe located at `data_file_path` will be used to choose the best model.
+  * **save_finetuning | Boolean | Default=true**: Whether to save the TRI model after the finetuning. The model will be saved as a [Transformers' pipeline](https://huggingface.co/docs/transformers/main_classes/pipelines), creating a folder `TRI_Pipeline` in the `output_folder_path` directory, containing the model file `model.safetensors`.
+
+## Results
+After execution of TRI (both from CLI or Python code), in the `output_folder_path` you can find the following files:
+* **Pretreated_Data.json**: If `save_pretreatment` is true, this file is created for saving the pretreated background knowledge and protected documents, sometimes referred as training and evaluation data, respectively. Leveraged if `load_saved_pretreatment` is true.
+* **Pretrained_Model.pt**: If `save_additional_pretraining` is true, this file is created for saving the additionally pretrained language model. Leveraged if `load_saved_pretraining` is true.
+* **TRI_Pipeline**: If `save_finetuning` is true, this folder is created for saving the . Leveraged if `load_saved_finetuning` is true.
+* **Results.csv**: After each epoch of finetuning, the Text Re-Identification Risk (TRIR) resulting from each anonymization method will be evaluated. These results are stored (always appending, not overwriting) in a CSV file named `Results.csv`. This file contains the epoch time, epoch number, the TRIR for each anonymization method and the average TRIR. for instance, if using the dataframe exemplified in the `data_file_path` configuration description, TRIR results will correspond to Method1 and Method2:
+  | Time                | Epoch | Method1 | Method2 | Average |
+  | ------------------- | ----- | ------- | ------- | ------- |
+  | 01/08/2024 08:50:04 | 1     | 74      | 36      | 55      |
+  | 01/08/2024 08:50:37 | 2     | 92      | 44      | 68      |
+  | 01/08/2024 08:50:10 | 3     | 94      | 48      | 71      |
+
+  At the end of the program, TRIR is predicted for all the anonymization methods using the best TRI model considering the criteria defined for the setting `dev_set_column_name`. This final evaluation is also stored in the `Results.csv` file as an "additional epoch".
 

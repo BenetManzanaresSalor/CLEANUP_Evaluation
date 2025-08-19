@@ -33,7 +33,7 @@ from .tri import TRI
 PRECISION_METRIC_NAME = "Precision"
 WEIGHTED_PRECISION_METRIC_NAME = "PrecisionWeighted"
 RECALL_METRIC_NAME = "Recall"
-RECALL_PER_ENTITY_METRIC_NAME = "RecallPerEntity"
+RECALL_PER_ENTITY_METRIC_NAME = "RecallPerEntityType"
 TPI_METRIC_NAME = "TPI"
 TPS_METRIC_NAME = "TPS"
 NMI_METRIC_NAME = "NMI"
@@ -101,14 +101,22 @@ class TAE:
 
     #region Initialization
     
-    def __init__(self, corpus:List[Document], spacy_model_name:str=SPACY_MODEL_NAME):
+    def __init__(self, corpus:Union[str,List[Dict]], spacy_model_name:str=SPACY_MODEL_NAME):
         """
         Initializes the `TAE` with a given corpus and spaCy model.
 
         Args:
-            corpus (List[Document]): The list of documents to be evaluated.
+            corpus (Union[str,List[Document]]): Path to the corpus JSON file or 
+                list of documents to be evaluated (result of loading the JSON).
             spacy_model_name (str): The name of the spaCy model to load.
         """
+
+        # Load corpus from file if it's a path
+        if type(corpus)==str:
+            with open(corpus, encoding="utf-8") as f:
+                corpus = json.load(f)
+            if type(corpus)!=list:
+                raise RuntimeError("Corpus JSON file must be a list of documents")
 
         # Documents indexed by identifier
         self.documents = {}
@@ -149,38 +157,21 @@ class TAE:
                               NMI_METRIC_NAME:self.get_NMI,
                               TRIR_METRIC_NAME:self.get_TRIR}
 
-    @classmethod
-    def from_file_path(self, corpus_file_path:str, spacy_model_name:str=SPACY_MODEL_NAME):
-        """
-        Initializes the `TAE` from a JSON corpus file.
-
-        Args:
-            corpus_file_path (str): The path to the corpus JSON file.
-            spacy_model_name (str): The name of the spaCy model to load.
-
-        Returns:
-            TAE: An instance of the TAE class.
-        """
-        with open(corpus_file_path, encoding="utf-8") as f:
-            corpus = json.load(f)
-        if type(corpus)!=list:
-            raise RuntimeError("Corpus JSON file must be a list of documents")
-        return TAE(corpus, spacy_model_name=spacy_model_name)
-
     #endregion
 
 
     #region Evaluation
 
-    def evaluate(self, anonymizations:Dict[str, List[MaskedDocument]], metrics:Dict[str,dict], results_file_path:Optional[str]=None) -> dict:
+    def evaluate(self, anonymizations:Union[Dict[str, List[MaskedDocument]],Dict[str, str]], metrics:Dict[str,dict], results_file_path:Optional[str]=None) -> dict:
         """
         Evaluates multiple anonymizations based on the specified metrics.
 
         Args:
-            anonymizations (Dict[str, List[MaskedDocument]]): A dictionary where keys are anonymization names
-                                                                and values are lists of masked documents.
+            anonymizations (Union[Dict[str, List[MaskedDocument]],Dict[str, str]]): A dictionary where keys are anonymization names
+                and values are lists of MaskedDocument or strings corresponding to paths to JSON files containing the anonymizations. 
+                In the latter case, the lists of MaskedDocument contained in those JSON files are loaded.
             metrics (Dict[str, dict]): A dictionary where keys are metric names and values are their parameters.
-            Metric names are splitted by underscores ("_"). The string before the first underscore must be one of those present in `METRIC_NAMES`.
+                Metric names are splitted by underscores ("_"). The string before the first underscore must be one of those present in `METRIC_NAMES`.
             results_file_path (Optional[str]): The path to a file where results will be written.
 
         Returns:
@@ -188,6 +179,11 @@ class TAE:
         """
         
         results = {}
+
+        # Load anonymizations from disk if they are paths
+        if isinstance(next(iter(anonymizations.values())),str):
+            for anon_name, anon_file_path in anonymizations.items():
+                anonymizations[anon_name] = MaskedCorpus(anon_file_path)
 
         # Initial checks
         self._eval_checks(anonymizations, metrics)

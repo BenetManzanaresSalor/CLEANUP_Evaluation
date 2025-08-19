@@ -213,14 +213,15 @@ class Document:
         
         # Get gold annotated entities (indexed by id) if they exist
         self.gold_annotated_entities = {}
-        for annotator, ann_by_person in gold_annotations.items():
-            if ENTITY_MENTIONS_KEY in ann_by_person: # Optional key           
-                for entity in self._get_entities_from_mentions(ann_by_person[ENTITY_MENTIONS_KEY]):                
-                    if entity.entity_id in self.gold_annotated_entities: # Each entity_id is specific for each annotator
-                        raise RuntimeError(f"Gold annotations of document {self.doc_id} have an entity ID repeated by multiple annotators: {entity.entity_id}")                        
-                    entity.annotator = annotator
-                    entity.doc_id = doc_id
-                    self.gold_annotated_entities[entity.entity_id] = entity
+        if not gold_annotations is None: 
+            for annotator, ann_by_person in gold_annotations.items():
+                if ENTITY_MENTIONS_KEY in ann_by_person: # Optional key           
+                    for entity in self._get_entities_from_mentions(ann_by_person[ENTITY_MENTIONS_KEY]):                
+                        if entity.entity_id in self.gold_annotated_entities: # Each entity_id is specific for each annotator
+                            raise RuntimeError(f"Gold annotations of document {self.doc_id} have an entity ID repeated by multiple annotators: {entity.entity_id}")                        
+                        entity.annotator = annotator
+                        entity.doc_id = doc_id
+                        self.gold_annotated_entities[entity.entity_id] = entity
     
     def _get_entities_from_mentions(self, entity_mentions:List[dict]) -> List[AnnotatedEntity]:
         """

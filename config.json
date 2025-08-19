@@ -19,11 +19,12 @@
     "results_file_path": "outputs/results.csv",
     "metrics":{
         "Precision":{},
-        "_PrecisionWeighted":{},
-        "_Recall": {},
-        "_RecallPerEntity":{},
+        "PrecisionWeighted":{},
+        "Recall": {},
+        "RecallPerEntityType":{},
         "TPI": {},
         "_TPS": {},
+        "NMI": {},
         "_NMI_minilm":{
             "embedding_model_name":"all-MiniLM-L6-v2"
         },
