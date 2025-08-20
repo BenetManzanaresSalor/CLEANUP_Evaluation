@@ -1,8 +1,7 @@
 <h1 align="center">Text Anonymization Evaluator (TAE)</h1>
 <p align="center">
-  <img src="https://img.shields.io/badge/License-MIT-orange" alt="License on Windows 11"/>
-  <img src="https://img.shields.io/badge/Windows%2011-Working-ok" alt="Working on Windows 11"/>
-  <img src="https://img.shields.io/badge/Linux_based-Compatible_but_not_tested-lightgrey" alt="Compatible but not tested on Linux-based systems"/> #TODO: Test on Ubuntu
+  <img src="https://img.shields.io/badge/License-MIT-orange" alt="License MIT"/>
+  #TODO: PyPi
 </p>
 
 This repository contains the code and experimental data for the **Text Anonymization Evaluator** (TAE), an evaluation tool for text anonymization including multiple state-of-the-art metrics for both utility preservation and privacy protection.
@@ -105,7 +104,7 @@ pip install taeval
 # Usage examples
 TAE was designed to be run [from CLI](#from-cli), but it can also be executed [from code](#from-code). In the following, we instruct into how to execute it using both approaches, assuming that the steps from the [Install section](#install) have been already completed.
 
-*NOTE: During execution with either approach, the current progress, errors, and results will be displayed. In addition, if a results filepath is provided, all evaluation results will be stored in a CSV file.*
+*NOTE: During execution with either approach, the current progress, errors, and results will be displayed. In addition, all evaluation results will be stored in a [CSV file at the specified results filepath](#results).*
 
 
 ## From CLI
@@ -129,7 +128,7 @@ from tae import TAE
 tae = TAE("data/tab/corpora/TAB_test_Corpus.json") #TODO: Limpiar de replacement_mistral y demás
 
 # Load anonymizations
-anonymizations = { #TODO: Check anonymizations in repo, including Ildikó's versions
+anonymizations = {
     "Presidio":"data/tab/anonymizaitons/TAB_test_Presidio_Entity.json", 
     "spaCy":"data/tab/anonymizaitons/TAB_test_spaCy_Entity.json",
     "Manual": "data/tab/anonymizaitons/TAB_test_Manual_Entity.json"
@@ -137,8 +136,9 @@ anonymizations = { #TODO: Check anonymizations in repo, including Ildikó's vers
 
 # Define metrics dictionary
 metrics = {
-    "Precision":{},                 # Uses default configuration
-    "TPI": {"term_alterning":4},    # Uses default configuration except for term_alterning
+    "Precision":{},                     # Uses default configuration
+    "TPS_Default": {},                  # Uses default configuration
+    "TPS_TA=4": {"term_alterning":4},   # Uses default configuration except for term_alterning
 }
 
 # Define file path for the results CSV file (containing directory will be created automatically)
@@ -147,7 +147,7 @@ results_file_path = "outputs/results.csv"
 # Run evaluation
 results = tae.evaluate(anonymizations, metrics, results_file_path)
 
-# NOTE: The TAE instance can be reused for evaluating the corpus using other anonymizations, metrics and/or results filepath path
+# NOTE: The TAE instance can be reused for evaluating the corpus using other anonymizations, metrics and/or results filepath #TODO: file_path->filepath and the same for folder
 ```
 This assumes that you have TAE ready to import. That is trivial if you have install it [from PyPi](#from-pypi), but requires you to have the [tae](tae) package folder within your project workspace if you have install it [from source](#from-source). That is why we recommend to install it [from PyPi](#from-pypi) for usage from code.
 
@@ -166,14 +166,14 @@ Subsections below detail all the parameters for each of the concepts, including 
   The corpus file should follow a format such as that of [TAB_test_Corpus.json](data/tab/corpora/TAB_test_Corpus.json). That is, a list of dictionaries, with each dictionary corresponding to a document and containing at least these key-values:
     * `doc_id | String`: Unique identifier of the document. For the [TRIR metric](#trir), this requires also to be unique for the individual to protect, so each individual is assumed to appear in only one document.
     * `text | String`: Textual content of the document.
-    * `annotations | Dictionary (Optional)`: Manual annotations used for the [Precision](#precision), [PrecisionWeighted](#precision), [Recall](#recall) and [RecallPerEntityType](#recallperentitytype) metrics. Nevertheless, `annotations` can be ignored (*i.e.*, missing or assigned to `None`) if none of these metrics is used. 
-        * Each *key* of this dictionary corresponds to an annotator identifier (*e.g*, "annotator1" and "annotator2"), being possible to have one or more annotators per document.
-        * Each *value* of this dictionary is another dictionary containing `entity_mentions` as *key* and, as *value*, the list of all the entities mentioned in the text. Each entity mention in this list is defined by another dictionary, including at least the following key-values:
+    * `annotations | Dictionary (Optional)`: Manual annotations used for the [Precision](#precision), [PrecisionWeighted](#precision), [Recall](#recall) and [RecallPerEntityType](#recallperentitytype) metrics. **Nevertheless, `annotations` can be ignored (*i.e.*, missing or assigned to `None`) if none of these metrics is used.** These are defined by a dictionary where:
+        * *key* is the `annotator_id | String` (*e.g*, "annotator1" and "annotator2"), being possible to have one or more annotators per document.
+        * *value* is another dictionary containing `entity_mentions` as *key* and, as *value*, the list of all the entities mentioned in the `text`. Each mention in this list is defined by another dictionary, including at least the following key-values:
             * `start_offset | Integer`: Index of the first (included) character in the `text` corresponding to this entity mention.
             * `end_offset | Integer`: Index of the last (not included) character in the `text` corresponding to this entity mention.
             * `entity_type | String`: Conceptual/semantic type of annotated entity (*e.g.*, "CODE", "PERSON", "DATETIME" or "ORG"). Used in [RecallPerEntityType](#recallperentitytype). The set of possible types can be defined freely.
             * `identifier_type | String`: Indicates whether the entity is a "DIRECT" identifier (*i.e.*, allows to identify the individual to protect by itself), a "QUASI" identifier (*i.e.*, allows to identify the individual to protect in combination with other quasi-identifiers) or "NO_MASK" (*i.e.*, is not disclosive, so does not require any masking). 
-            * `entity_id | String`: Unique identifier of the entity, **not the particular mention**. The same entity (*e.g.*, "Edinburgh") can appear multiple times in the text, each time being a different mention, but with the same `entity_id`. This is used for entity-based [Precision](#precision), [PrecisionWeighted](#precision) and [Recall](#recall).        
+            * `entity_id | String`: Unique identifier of the entity, not the particular mention. The same entity (*e.g.*, "Edinburgh") can appear multiple times in the text, each time being a different mention but with the same `entity_id`. This is used for entity-based [Precision](#precision), [PrecisionWeighted](#precision) and [Recall](#recall).
 
         The following JSON block exemplifies the `annotations` structure with a single entity mention:
         ```json
@@ -206,15 +206,15 @@ Subsections below detail all the parameters for each of the concepts, including 
   This parameter can be provided either through the JSON configuration file [from CLI](#from-cli), or using the `TAE.evaluate` function if running [from code](#from-code).
   
   Anonymizations are specified through a dictionary where:
-  * *keys* are the anonymization names (*e.g.*, `"Presidio"`).
-  * *values* are paths to JSON anonymization files.
+  * *key* is the `anonymization_name | String` (*e.g.*, "Presidio").
+  * *value* is the `anonymization_path | String` to the JSON anonymization file.
   
-    Each anonymization file must follow the structure such as that of [TAB_test_Manual_Entity.json](data/tab/anonymizations/TAB_test_Manual_Entity.json). Specifically, it should contain a dictionary where:
-      * *key* is the `doc_id`, matching the one used in the `corpus`.
-      * *value* is the *maskings list* for that document. The *maskings list* consists of tuples (represented as lists in JSON) containing **two or three elements**:
+    This anonymization file must follow a structure such as that of [TAB_test_Manual_Entity.json](data/tab/anonymizations/TAB_test_Manual_Entity.json). Specifically, it should contain a dictionary where:
+      * *key* is the `doc_id | String`, matching the one used in the `corpus`.
+      * *value* is the `maskings_list | List` for that document. This list consists of tuples (represented as lists in JSON) containing two or three elements:
         1. `start_offset | Integer`: Index of the first (included) character in the `text` corresponding to this masking. Should be coherent with the `text` in the `corpus`.
         2. `end_offset | Integer`: Index of the last (not included) character in the `text` corresponding to this masking. Should be coherent with the `text` in the `corpus`.
-        3. `replacement | String (Optional)`: Text replacement for this masking. It can be any length. It can be neglected for some or all maskings, what would be equivalent to supression-based masking.
+        3. `replacement | String (Optional)`: Text replacement for this masking. It can be any length. **It can be neglected for some or all maskings, what would be equivalent to supression-based masking.**
 
       The following JSON block illustrates the structure of an anonymization file for a single document, with one replacement-based masking and one suppression-based masking:
       ```json
@@ -230,19 +230,33 @@ Subsections below detail all the parameters for each of the concepts, including 
 
 
 ## Metrics
-* `metrics | Dictionary`: Specification of all the evaluation metrics to apply.
+* `metrics | Dictionary`: Specification of all the evaluation metrics to use. Defined by a dictionary where:
+  * *key* corresponds to the `metric_name | String`. When processed, the value is split by the underscore ("_") character. The first part of the split, or the entire string if no underscore exists, is taken as the `metric_key`. This identifier must match one of the following: `["Precision", "PrecisionWeighted", "TPI", "TPS", "NMI", "Recall", "RecallPerEntityType", "TRIR"]`. If the `metric_key` is invalid (for instance, because `metric_name` starts with an underscore) this triggers a warning log and prevents the metric from being computed. Any text following the first underscore is independent of the `metric_key`, and can be used to indicate variations of the same metric (*e.g.*, "TPS", "TPS_TA=4", "TPS_TA=4_bert").
+
+  * *value* corresponds to the `metric_parameters | Dictionary`, which specifies the parameters of a metric that are either mandatory or different from the default ones. This dictionary uses the `parameter_name | String` as the *key* and the corresponding `parameter_value`, of varying type, as the *value*. For all metrics except [TRIR](#trir), no parameters are mandatory, so `metric_parameters` can be empty, in which case the default settings are applied. The following subsections describe the available parameters for each metric in detail. 
+
 
 ### Utility preservation
+The following set of metrics measure or estimate how well the transformed data retains the characteristics, relationships, or patterns of the original corpus. All these metrics are "the higher, the better".
 
 #### Precision
+Standard utility metric for text anonymization, that measures the percentage of terms masked by the anonymization that were also masked in the manual annotation. TAE's implementation follows the version proposed in [The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization](https://aclanthology.org/2022.cl-4.19/). This version allows for multi-annotated documents (performing a micro-average over annotators) and weighting based on information content. The available parameters are:
+* `token_level | bool | Default=True`: 
+* `weighting_model_name | String | Default=None`:
+* `weighting_max_segment_length | Integer | 100`:
+
 
 #### PrecisionWeighted
+Proposed in []().
 
 #### TPI
+Proposed in []().
 
 #### TPS
+Proposed in []().
 
 #### NMI
+Proposed in []().
 
 
 ### Privacy protection
@@ -250,25 +264,12 @@ Subsections below detail all the parameters for each of the concepts, including 
 #### Recall
 
 #### RecallPerEntityType
+Proposed in []().
 
 #### TRIR
+Proposed in []().
 
-
-## Results
-* `results_file_path | String`: Path for the CSV results file. 
-  This parameter can be provided either through the JSON configuration file [from CLI](#from-cli), or using the `TAE.evaluate` function if running [from code](#from-code).
-
-  During the `TAE.evaluate` execution, obtained results will be appended to this CSV file, previously creating the file and the folders containing it if they are missing. The file follows the next format:
-  * *Header*:
-  * *Metric result*:
-  #TODO: Add example table(?)
-
-*NOTE: When running [from code](#from-code), the `TAE.evaluate` function returns the results in dictionary, keys being the metric name and values being another dictionary mapping anonymization names to the obtained values.*
-
-
-
-//////////////////////////////////////////////////////////////////////////////////////////////// FROM TRI ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-### Data
+##### Data
 * **Mandatory configurations (generally belonging to Data reading)**:
   * **output_folder_path | String | MANDATORY**: Determines the folder were results will be stored (see [Results section](#results)). The folder will be created if it does not exist.
   * **data_file_path | String | MANDATORY**: Path to the data file to use. That file is expected to define a Pandas dataframe stored in JSON or CSV format containing three types of columns:
@@ -304,7 +305,7 @@ Subsections below detail all the parameters for each of the concepts, including 
 * **Save pretreatment**:
   * **save_pretreatment | Boolean | Default=true**: Whether to save the data after pretreatment. A JSON file name `Pretreated_Data.json` will be generated and stored in the `output_folder_path` folder. As pretreatment it is also included the curation of new anonymizations caused by `updated_loaded_eval_pretreatment=true`.
 
-### Build classifier
+##### Build classifier
 * **Load already trained TRI model**:
   * **load_saved_finetuning | Boolean | Default=true**: If the `TRI_Pipeline` exists in the `output_folder_path` directory and contains the model file `model.safetensors`, load that already trained TRI model instead of running the additional pretraining and finetuning. It requires a previous execution with `save_finetuning=true`.
 * **Create base language model**:
@@ -327,7 +328,7 @@ Subsections below detail all the parameters for each of the concepts, including 
   * **dev_set_column_name | String | Default=false**: Specifies the column name to be used for model selection. If set to `false` (boolean, not string), the model with the highest average accuracy across all anonymization sets will be selected as the final model. If a column name is provided, the accuracy corresponding to that specific anonymization from the dataframe located at `data_file_path` will be used to choose the best model.
   * **save_finetuning | Boolean | Default=true**: Whether to save the TRI model after the finetuning. The model will be saved as a [Transformers' pipeline](https://huggingface.co/docs/transformers/main_classes/pipelines), creating a folder `TRI_Pipeline` in the `output_folder_path` directory, containing the model file `model.safetensors`.
 
-## Results
+##### Results
 After execution of TRI (both from CLI or Python code), in the `output_folder_path` you can find the following files:
 * **Pretreated_Data.json**: If `save_pretreatment` is true, this file is created for saving the pretreated background knowledge and protected documents, sometimes referred as training and evaluation data, respectively. Leveraged if `load_saved_pretreatment` is true.
 * **Pretrained_Model.pt**: If `save_additional_pretraining` is true, this file is created for saving the additionally pretrained language model. Leveraged if `load_saved_pretraining` is true.
@@ -340,4 +341,25 @@ After execution of TRI (both from CLI or Python code), in the `output_folder_pat
   | 01/08/2024 08:50:10 | 3     | 94      | 48      | 71      |
 
   At the end of the program, TRIR is predicted for all the anonymization methods using the best TRI model considering the criteria defined for the setting `dev_set_column_name`. This final evaluation is also stored in the `Results.csv` file as an "additional epoch".
+
+
+## Results
+* `results_file_path | String`: Path to the CSV results file.  
+  This parameter can be provided either through the JSON configuration file [from CLI](#from-cli), or by using the `TAE.evaluate` function when running [from code](#from-code).
+
+  During the execution of `TAE.evaluate`, the obtained results will be appended to this CSV file. If the file or its containing folders are missing, they will be created. The file follows the format below:
+  * *Header*: The first column is "Metric/Anonymization," followed by one column for each `anonymization_name` defined in [Anonymizations](#anonymizations).
+  * *Metric result*: One row for each valid metric defined in [Metrics](#metrics), with the `metric_name` in the first column and the anonymization results in the remaining columns.
+
+  Here is an example of a result table for three metrics and two anonymizations:
+
+  | Metric/Anonymization | Anonymization1 | Anonymization2 |
+  |----------------------|----------------|----------------|
+  | TPS                  | 0.86           | 0.73           |
+  | NMI                  | 0.62           | 0.55           |
+  | TRIR                 | 0.17           | 0.10           |
+
+
+*NOTE: When running [from code](#from-code), the `TAE.evaluate` function also returns the results in a dictionary, keys being the `metric_name` and values being another dictionary mapping `anonymization_name` to the obtained value.*
+
 
