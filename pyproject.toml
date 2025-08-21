@@ -1,4 +1,4 @@
-[tool.poetry] #TODO: Test all of this
+[tool.poetry]
 name = "tae"
 version = "0.1.0"
 description = "Text Anonymization Evaluator (TAE)"
@@ -21,7 +21,7 @@ classifiers = [
 ]
 packages = [{ include = "tae" }]
 
-[tool.poetry.dependencies] #TODO: Comment indirect dependencies
+[tool.poetry.dependencies]
 python = ">=3.9,<3.10"
 
 # Core scientific computing
