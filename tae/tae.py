@@ -284,153 +284,6 @@ class TAE:
     #endregion
 
 
-    #region Privacy metrics
-
-
-    #region Recall
-
-    def get_recall(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
-                    include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL,
-                    verbose:bool=True) -> float:
-        """
-        Returns the mention or token-level recall of the masked spans when compared to the gold annotations. 
-        This metric is used to assess privacy protection.
-        This metric implementation was initially presented in [The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization](https://aclanthology.org/2022.cl-4.19/) (Pilán et al., CL 2022)
-
-        Args:
-            masked_docs (List[MaskedDocument]): Documents together with spans masked by the anonymization method.
-            include_direct (bool): Whether to include direct identifiers in the metric.
-            include_quasi (bool): Whether to include quasi identifiers in the metric.
-            token_level (bool): Whether to compute the recall at the level of tokens or mentions.
-            verbose (bool): Whether to print verbose output during execution.
-
-        Returns:
-            recall (float): The recall score.
-        """
-
-        nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
-                                                                  include_quasi, token_level)
-        
-        nb_masked_elements = sum(nb_masked_by_type.values())
-        nb_elements = sum(nb_by_type.values())
-        
-        if nb_elements != 0:
-            recall = nb_masked_elements / nb_elements
-        else:
-            recall = 0
-            if verbose: logging.warning("Zero annotated identifiers, resulting in a recall of zero")
-        
-        return recall
-    
-    def get_recall_per_entity_type(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
-                                   include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> Dict[str,float]:
-        """
-        Returns the mention or token-level recall of the masked spans when compared
-        to the gold annotations, and factored by entity type.
-        This metric implementation was initially presented in [The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization](https://aclanthology.org/2022.cl-4.19/) (Pilán et al., CL 2022)
-
-        Args:
-            masked_docs (List[MaskedDocument]): Documents together with spans masked by the system.
-            include_direct (bool): Whether to include direct identifiers in the metric.
-            include_quasi (bool): Whether to include quasi identifiers in the metric.
-            token_level (bool): Whether to compute the recall at the level of tokens or mentions.
-
-        Returns:
-            dict: A dictionary where keys are entity types and values are their corresponding recall scores.
-        """
-        
-        nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
-                                                                  include_quasi, token_level)
-        
-        return {ent_type:nb_masked_by_type[ent_type]/nb_by_type[ent_type]
-                for ent_type in nb_by_type}
-                
-    def _get_mask_counts(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
-                                   include_quasi:bool=RECALL_INCLUDE_QUASI,
-                                   token_level:bool=RECALL_TOKEN_LEVEL) -> Tuple[Dict[str,int],Dict[str,int]]:
-        nb_masked_elements_by_type = {}
-        nb_elements_by_type = {}
-        
-        for doc in masked_docs:            
-            gold_doc = self.documents[doc.doc_id]           
-            for entity in gold_doc.get_entities_to_mask(include_direct, include_quasi):
-                
-                if entity.entity_type not in nb_elements_by_type:
-                    nb_elements_by_type[entity.entity_type] = 0
-                    nb_masked_elements_by_type[entity.entity_type] = 0
-                
-                spans = list(entity.mentions)
-                if token_level:
-                    spans = [(start, end) for mention_start, mention_end in spans
-                             for start, end in gold_doc.split_by_tokens(mention_start, mention_end)]
-                
-                for start, end in spans:
-                    if gold_doc.is_mention_masked(doc, start, end):
-                        nb_masked_elements_by_type[entity.entity_type] += 1
-                    nb_elements_by_type[entity.entity_type] += 1
-        
-        return nb_masked_elements_by_type, nb_elements_by_type
-
-    #endregion
-
-
-    #region TRIR
-
-    def get_TRIR(self, anonymizations:Dict[str, List[MaskedDocument]],
-                 background_knowledge_file_path:str, output_folder_path:str,
-                 verbose:bool=True, **kwargs) -> Dict[str, float]:
-        """
-        Calculates the Text Re-Identification Risk (TRIR) for given anonymizations, simulating a re-identification attack on the same basis as record linkage.
-        This metric is used to empirically assess privacy protection.
-        This metric was proposed in [Evaluating the disclosure risk of anonymized documents via a machine learning-based re-identification attack](https://link.springer.com/article/10.1007/s10618-024-01066-3) (Manzanares-Salor et al., DAMI 2024)
-
-        Args:
-            anonymizations (Dict[str, List[MaskedDocument]]): A dictionary where keys are anonymization names
-                                                                and values are lists of masked documents.
-            background_knowledge_file_path (str): Path to the background knowledge JSON file.
-            output_folder_path (str): Path to the folder where TRI outputs (e.g., trained model) will be stored.
-            verbose (bool): Whether to print verbose output during execution.
-            **kwargs: Additional keyword arguments to be passed to the TRI class constructor. Check `README.md` or the [Text Re-Identification repository](https://github.com/BenetManzanaresSalor/TextRe-Identification) for more information.
-
-        Returns:
-            dict: A dictionary where keys are anonymization names and values are their TRIR scores.
-        """
-        
-        # Load corpora
-        corpora = self._get_anonymization_corpora(anonymizations)
-
-        # Load background knowledge and add it to the corpora
-        with open(background_knowledge_file_path, "r", encoding="utf-8") as f:
-            bk_dict = json.load(f)
-        for doc_id, bk in bk_dict.items():
-            doc_dict = corpora.get(doc_id, {})
-            doc_dict[DOC_ID_KEY] = doc_id
-            doc_dict[BACKGROUND_KNOWLEDGE_KEY] = bk
-            corpora[doc_id] = doc_dict
-
-        # Create dataframe from corpora
-        dataframe = pd.DataFrame.from_dict(list(corpora.values()))
-        
-        # Create and run TRI
-        tri = TRI(
-            dataframe=dataframe,
-            background_knowledge_column=BACKGROUND_KNOWLEDGE_KEY,
-            output_folder_path=output_folder_path,
-            individual_name_column=DOC_ID_KEY,
-            **kwargs)        
-        results = tri.run(verbose=verbose)
-
-        # Obtain TRIR
-        results = {anon_name:values["eval_Accuracy"] for anon_name, values in results.items()}
-
-        return results
-
-    #endregion
-
-
-    #endregion
-
-
     #region Utility metrics
 
 
@@ -443,7 +296,7 @@ class TAE:
         """
         Standard proxy of utility for text anonymization.
         It measures the percentage of terms masked by the anonymizations that were also masked by the **manual annotations**.
-        TAE's implementation follows the version proposed in [The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization](https://aclanthology.org/2022.cl-4.19/),
+        TAE's implementation follows the version proposed in [Pilán et al., The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization, Computational Linguistics, 2022](https://aclanthology.org/2022.cl-4.19/),
         which allows for multi-annotated documents (performing a micro-average over annotators),
         token-level and mention-level assessment and weighting based on information content (IC).
 
@@ -453,7 +306,7 @@ class TAE:
                 If `None`, uniform weighting (same weights for all) is used. 
                 The name must be a valid [HuggingFace's model](https://huggingface.co/models) name, such as ["google-bert/bert-base-uncased"](https://huggingface.co/google-bert/bert-base-uncased).
             weighting_max_segment_length (int): Maximum segment length for `ICTokenWeighting`. Texts with more tokens than this will be splitted for IC computation.
-            token_level (bool): If set to `True`, the precision is computed at the level of tokens, otherwise the precision is at the mention-level.
+            token_level (bool): If set to `True`, the precision is computed at the level of tokens, otherwise it is at the mention-level.
                 The latter implies that the whole human-annotated mention (rather than some tokens) needs to be masked for being considered a true positive.
             verbose (bool): Whether to print verbose output during execution.
 
@@ -515,8 +368,10 @@ class TAE:
                       token_level:bool=PRECISION_TOKEN_LEVEL,
                       verbose:bool=True) -> float:
         """
-        Returns the precision of the masked spans, with Information Content (IC) weighting by default.
-        This defines a wrapper around the `get_precision` method for avoiding the need to select the `weighting_model_name` for IC weighting.
+        Precision but employing IC weighting by default.
+        It is implemented as a wrapper of `get_precision`, so the arguments are exactly the same.
+        The only difference is that `weighting_model_name` defaults to ["google-bert/bert-base-uncased"](https://huggingface.co/google-bert/bert-base-uncased).
+        This avoids the need to select the `weighting_model_name` for IC weighting.
 
         Args:
             masked_docs (List[MaskedDocument]): Documents together with spans masked by the anonymization method.
@@ -536,16 +391,16 @@ class TAE:
     #endregion
     
 
-    #region TPS and TPI
+    #region TPI and TPS
     
     def get_TPI(self, masked_docs:List[MaskedDocument], weighting_model_name:Optional[str]=IC_WEIGHTING_MODEL_NAME,
             weighting_max_segment_length:int=IC_WEIGHTING_MAX_SEGMENT_LENGTH, 
             term_alterning:Union[int,str]=TPI_TERM_ALTERNING, use_chunking:bool=TPI_USE_CHUNKING,
             ICs_dict:Optional[Dict[str,np.ndarray]]=None) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
         """
-        Text Preserved Information (TPI) measures the percentage of information content (IC) still present in the masked documents.
+        **Text Preserved Information (TPI)** measures the percentage of information content (IC) still present in the masked documents.
         This metric is used to assess utility preservation.
-        It was proposed in **Unsupervised utility evaluation of text anonymization methods via neural language models, Submitted**.
+        It was proposed in **Manzanares-Salor et al., A comparative analysis, enhancement and evaluation of text anonymization with pre-trained Large Language Models, Expert Systems With Applications, In Press, 2025**.
         The `ICTokenWeighting` is employed for measuring IC.
         TPI can be seen as an simplified/ablated version of Text Preserved Similarity (TPS), not taking into account replacements and their similarities.
 
@@ -632,11 +487,11 @@ class TAE:
             ICs_dict:Optional[Dict[str,np.ndarray]]=None,
             verbose:bool=True) -> Tuple[float, np.ndarray, Dict[str,np.ndarray], np.ndarray]:
         """
-        Text Preserved Similarity (TPS) measures the percentage of information content (IC) still present in the masked documents,
+        **Text Preserved Similarity (TPS)** measures the percentage of information content (IC) still present in the masked documents,
         weighted by the similarity between replacement and original terms.
         This metric is used to assess utility preservation for replacement-based masking (i.e., text sanitization).
         It employs `ICTokenWeighting` for measuring IC and a specified similarity model for replacement similarity.
-        This metric was proposed in [Truthful Text Sanitization Guided by Inference Attacks](https://arxiv.org/abs/2412.12928).
+        This metric was proposed in [Pilán et al., Truthful Text Sanitization Guided by Inference Attacks, Submitted, 2024](https://arxiv.org/abs/2412.12928).
         TPS can be seen as a replacement-compatible version of [TPI](#tpi) (detailed above), pondering it with replacements' similarity.
 
         Args:
@@ -958,9 +813,9 @@ class TAE:
                 verbose:bool=True) -> Tuple[Dict[str,float], List[List[np.ndarray]], np.ndarray, int]:
         """
         It compares the K-means++ clustering resulting from the original corpus to that resulting from the anonymized documents.
-        Normalized Mutual Information (NMI) is employed for assessing clustering similarity.
+        **Normalized Mutual Information (NMI)** is employed for assessing clustering similarity.
         This approach allows to measure empirical utility preservation for the generic downstream task of clustering.
-        This metric was proposed in [Truthful Text Sanitization Guided by Inference Attacks](https://arxiv.org/abs/2412.12928).
+        This metric was proposed in [Pilán et al., Truthful Text Sanitization Guided by Inference Attacks, Submitted, 2024](https://arxiv.org/abs/2412.12928).
         Clustering is repeated multiple times for minimizing the impact of randomness.
         Furthermore, for this particular implementation, clustering is carried out with multiple Ks increased linearly.
         The returned results are those corresponding to the K which provided the best [silouhette score](https://www.sciencedirect.com/science/article/pii/0377042787901257) in original texts clustering.
@@ -1107,6 +962,162 @@ class TAE:
             metrics[idx] = metric
         
         return metrics
+
+    #endregion
+
+
+    #endregion
+
+
+    #region Privacy metrics
+
+
+    #region Recall
+
+    def get_recall(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
+                    include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL,
+                    verbose:bool=True) -> float:
+        """
+        Standard privacy proxy for text anonymization.
+        It measures the percentage of terms masked by the **manual annotations** that were also masked by the anonymizations.
+        TAE's implementation follows the version proposed in [Pilán et al., The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization, Computational Linguistics, 2022](https://aclanthology.org/2022.cl-4.19/),
+        which allows for multi-annotated documents (performing a micro-average over annotators), token-level and mention-level assessment and 
+        independent consideration of direct and quasi identifiers.
+        Args:
+            masked_docs (List[MaskedDocument]): Documents together with spans masked by the anonymization method.
+            include_direct (bool): Whether to consider direct identifiers in the metric computation.
+            include_quasi (bool): Whether to include quasi identifiers in the metric computation.
+            token_level (bool): If set to `True`, recall is computed at the level of tokens, otherwise it is at the mention-level.
+                The latter implies that the whole human-annotated mention (rather than some tokens) needs to be masked for being considered a true positive.
+            verbose (bool): Whether to print verbose output during execution.
+
+        Returns:
+            recall (float): The recall score.
+        """
+
+        nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
+                                                                  include_quasi, token_level)
+        
+        nb_masked_elements = sum(nb_masked_by_type.values())
+        nb_elements = sum(nb_by_type.values())
+        
+        if nb_elements != 0:
+            recall = nb_masked_elements / nb_elements
+        else:
+            recall = 0
+            if verbose: logging.warning("Zero annotated identifiers, resulting in a recall of zero")
+        
+        return recall
+    
+    def get_recall_per_entity_type(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
+                                   include_quasi:bool=RECALL_INCLUDE_QUASI, token_level:bool=RECALL_TOKEN_LEVEL) -> Dict[str,float]:
+        """
+        It computes recall factored by the `entity_type` in the **manual annotations**, enabling a fine-grained analysis.
+        TAE's implementation follows the version proposed in [Pilán et al., The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization, Computational Linguistics, 2022](https://aclanthology.org/2022.cl-4.19/),
+        which allows for multi-annotated documents (performing a micro-average over annotators),
+        token-level and mention-level assessment and independent consideration of direct and quasi identifiers.
+        Args:
+            masked_docs (List[MaskedDocument]): Documents together with spans masked by the system.
+            include_direct (bool): Whether to include direct identifiers in the metric.
+            include_quasi (bool): Whether to include quasi identifiers in the metric.
+            token_level (bool): Whether to compute the recall at the level of tokens or mentions.
+
+        Returns:
+            dict: A dictionary where keys are entity types and values are their corresponding recall scores.
+        """
+        
+        nb_masked_by_type, nb_by_type = self._get_mask_counts(masked_docs, include_direct, 
+                                                                  include_quasi, token_level)
+        
+        return {ent_type:nb_masked_by_type[ent_type]/nb_by_type[ent_type]
+                for ent_type in nb_by_type}
+                
+    def _get_mask_counts(self, masked_docs:List[MaskedDocument], include_direct:bool=RECALL_INCLUDE_DIRECT, 
+                                   include_quasi:bool=RECALL_INCLUDE_QUASI,
+                                   token_level:bool=RECALL_TOKEN_LEVEL) -> Tuple[Dict[str,int],Dict[str,int]]:
+        nb_masked_elements_by_type = {}
+        nb_elements_by_type = {}
+        
+        for doc in masked_docs:            
+            gold_doc = self.documents[doc.doc_id]           
+            for entity in gold_doc.get_entities_to_mask(include_direct, include_quasi):
+                
+                if entity.entity_type not in nb_elements_by_type:
+                    nb_elements_by_type[entity.entity_type] = 0
+                    nb_masked_elements_by_type[entity.entity_type] = 0
+                
+                spans = list(entity.mentions)
+                if token_level:
+                    spans = [(start, end) for mention_start, mention_end in spans
+                             for start, end in gold_doc.split_by_tokens(mention_start, mention_end)]
+                
+                for start, end in spans:
+                    if gold_doc.is_mention_masked(doc, start, end):
+                        nb_masked_elements_by_type[entity.entity_type] += 1
+                    nb_elements_by_type[entity.entity_type] += 1
+        
+        return nb_masked_elements_by_type, nb_elements_by_type
+
+    #endregion
+
+
+    #region TRIR
+
+    def get_TRIR(self, anonymizations:Dict[str, List[MaskedDocument]],
+                 background_knowledge_file_path:str, output_folder_path:str,
+                 verbose:bool=True, **kwargs) -> Dict[str, float]:
+        """
+        It simulates a **Text Re-Identification Attack (TRIA)** on the anonymized documents in order to measure their **Text Re-Identification Risk (TRIR)**.
+        Introduced in [Manzanares-Salor et al., Evaluating the disclosure risk of anonymized documents via a machine learning-based re-identification attack, Data Mining and Knowledge Discovery, 2024](https://link.springer.com/article/10.1007/s10618-024-01066-3),
+        this metric evaluates privacy protection focusing on the key factor of *empirical re-identification probability*.
+        TRIA builds on the same principles as record linkage attacks, which are widely used for assessing disclosure risk in structured data.
+        The approach assumes that an attacker possesses background knowledge (BK) consisting of public information about a *non-strict* superset of the protected individuals. 
+        Using this knowledge, the attacker trains a classifier to associate documents with individuals, and then applies the model to anonymized documents in an attempt to link them to the correct individuals from the BK.
+        TRIR is defined as the accuracy of this linkage process.
+        Args:
+            anonymizations (Dict[str, List[MaskedDocument]]): A dictionary where keys are anonymization names
+                                                                and values are lists of masked documents.
+            background_knowledge_file_path (str): Path to the background knowledge JSON file (*e.g.*, "data/tab/bk/TAB_test_BK=Public.json"). The file must contain a dictionary of background knowledge documents where
+                *Key* is the `doc_id` of the document. Since the BK comprehends a *non-strict* superset of the protected individuals, some `doc_id`s may not appear in the corpus and not all corpus `doc_id`s will necessarily be present in the BK.
+                *Value*, on the other hand, is the textual content of the document.
+            output_folder_path (str): Path to the folder (*e.g.*, `"outputs/tab/TAB_test_BK=Public"`) where some **partial outputs** (e.g., curated data, trained model...) will be stored.
+                If the folder or its containing folders are missing, they will be created.
+                These outputs can be reused in later executions to compute different TRIR variants (*i.e.*, by adjusting optional parameters) without re-running the entire process.
+            verbose (bool): Whether to print verbose output during execution.
+            **kwargs: Additional optional parameters to be passed to the TRI class constructor.
+
+        Returns:
+            dict: A dictionary where keys are anonymization names and values are their TRIR scores.
+        """
+        
+        # Load corpora
+        corpora = self._get_anonymization_corpora(anonymizations)
+
+        # Load background knowledge and add it to the corpora
+        with open(background_knowledge_file_path, "r", encoding="utf-8") as f:
+            bk_dict = json.load(f)
+        for doc_id, bk in bk_dict.items():
+            doc_dict = corpora.get(doc_id, {})
+            doc_dict[DOC_ID_KEY] = doc_id
+            doc_dict[BACKGROUND_KNOWLEDGE_KEY] = bk
+            corpora[doc_id] = doc_dict
+
+        # Create dataframe from corpora
+        dataframe = pd.DataFrame.from_dict(list(corpora.values()))
+        
+        # Create and run TRI
+        tri = TRI(
+            dataframe=dataframe,
+            background_knowledge_column=BACKGROUND_KNOWLEDGE_KEY,
+            output_folder_path=output_folder_path,
+            individual_name_column=DOC_ID_KEY,
+            **kwargs)        
+        results = tri.run(verbose=verbose)
+
+        # Obtain TRIR
+        results = {anon_name:values["eval_Accuracy"] for anon_name, values in results.items()}
+
+        return results
 
     #endregion
 

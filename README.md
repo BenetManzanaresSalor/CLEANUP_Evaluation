@@ -5,7 +5,7 @@
 
 This repository contains the code and experimental data for the **Text Anonymization Evaluator** (TAE), an evaluation tool for text anonymization including multiple state-of-the-art metrics for both utility preservation and privacy protection.
 
-Experimental data was extracted from the [text-anonymization-benchmark](https://github.com/NorskRegnesentral/text-anonymization-benchmark) repository, corresponding to the publication [Pilán, I., Lison, P., Øvrelid, L., Papadopoulou, A., Sánchez, D., & Batet, M., The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization, Computational Linguistics, 2022](https://aclanthology.org/2022.cl-4.19/). The exact data files utilized are located in the [data](data) folder.
+Experimental data was extracted from the [text-anonymization-benchmark](https://github.com/NorskRegnesentral/text-anonymization-benchmark) repository, corresponding to the publication [Pilán, I., Lison, P., Øvrelid, L., Papadopoulou, A., Sánchez, D., & Batet, M., Pilán et al., The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization, Computational Linguistics, 2022, Computational Linguistics, 2022](https://aclanthology.org/2022.cl-4.19/). The exact data files utilized are located in the [data](data) folder.
 
 
 
@@ -41,9 +41,8 @@ Experimental data was extracted from the [text-anonymization-benchmark](https://
 ```
 Text Anonymization Evaluator (TAE)
 │   README.md                               # This README
-│   pyproject.toml                          # Package project defintion file
+│   pyproject.toml                          # Package project defintion file, including dependencies for pip
 │   environment.yml                         # Dependencies file for Conda
-│   requirements.txt                        # Dependencies file for Pip
 │   LICENSE.txt                             # License file
 │   example_config.json                     # Example configuration file
 └───taeval                                  # Package source code folder
@@ -241,19 +240,21 @@ The following set of metrics measure or estimate how well the transformed data r
 #### Precision
 Standard proxy of utility for text anonymization.
 It measures the percentage of terms masked by the anonymizations that were also masked by the **manual annotations**.
-TAE's implementation follows the version proposed in [The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization](https://aclanthology.org/2022.cl-4.19/), which allows for multi-annotated documents (performing a micro-average over annotators), token-level and mention-level assessment and weighting based on information content (IC).
+TAE's implementation follows the version proposed in [Pilán et al., The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization, Computational Linguistics, 2022](https://aclanthology.org/2022.cl-4.19/), which allows for multi-annotated documents (performing a micro-average over annotators), token-level and mention-level assessment and weighting based on information content (IC).
+
 The configurable parameters are:
 * `token_level | Boolean | Default=True`: If set to `True`, the precision is computed at the level of tokens, otherwise it is at the mention-level. The latter implies that the whole human-annotated mention (rather than some tokens) needs to be masked for being considered a true positive.
 * `weighting_model_name | String | Default=None`: Name of the model to be used for IC weighting, implemented in the `ICTokenWeighting` class. If `None`, uniform weighting (same weights for all) is used. The name must be a valid [HuggingFace's model](https://huggingface.co/models) name, such as ["google-bert/bert-base-uncased"](https://huggingface.co/google-bert/bert-base-uncased).
 * `weighting_max_segment_length | Integer | Default=100`: Maximum segment length for `ICTokenWeighting`. Texts with more tokens than this will be splitted for IC computation.
 
 #### PrecisionWeighted
-Precision but employing IC weighting by default. It is implemented as a wrapper of the aforementioned [Precision](#precision), so parameters are identical except for `weighting_model_name`, which defaults to ["google-bert/bert-base-uncased"](https://huggingface.co/google-bert/bert-base-uncased).
+[Precision](#precision) but employing IC weighting by default. It is implemented as a wrapper of the aforementioned [Precision](#precision), so the configurable parameters are exactly the same. The only difference is that `weighting_model_name` defaults to ["google-bert/bert-base-uncased"](https://huggingface.co/google-bert/bert-base-uncased). This avoids the need to select the `weighting_model_name` for IC weighting.
 
 #### TPI
-Text Preserved Information (TPI) measures the percentage of information content (IC) still present in the masked documents.
-It was proposed in **Unsupervised utility evaluation of text anonymization methods via neural language models, Submitted**.
+**Text Preserved Information (TPI)** measures the percentage of information content (IC) still present in the masked documents.
+It was proposed in **Manzanares-Salor et al., A comparative analysis, enhancement and evaluation of text anonymization with pre-trained Large Language Models, Expert Systems With Applications, In Press, 2025**.
 TPI can be seen as an simplified/ablated version of [TPS](#tps) (presented below), not taking into account replacements and their similarities.
+
 The configurable parameters are:
 * `term_alterning | Integer or String | Default=6`: Parameter for term alternation in the multi-round IC calculation.
   It can be an integer (e.g., N = 6) or the string "sentence".
@@ -266,9 +267,10 @@ The configurable parameters are:
 * `weighting_max_segment_length | Integer | Default=100`: Maximum segment length for `ICTokenWeighting`. Texts with more tokens than this will be splitted for IC computation.
 
 #### TPS
-Text Preserved Similarity (TPS) measures the percentage of information content (IC) still present in the masked documents, weighted by the similarity between replacement and original terms.
-It was proposed in [Truthful Text Sanitization Guided by Inference Attacks](https://arxiv.org/abs/2412.12928).
+**Text Preserved Similarity (TPS)** measures the percentage of information content (IC) still present in the masked documents, weighted by the similarity between replacement and original terms.
+It was proposed in [Pilán et al., Truthful Text Sanitization Guided by Inference Attacks, Submitted, 2024](https://arxiv.org/abs/2412.12928).
 TPS can be seen as a replacement-compatible version of [TPI](#tpi) (presented above), pondering it with replacements' similarity.
+
 The configurable parameters are:
 * `similarity_model_name | String | Default="paraphrase-albert-base-v2"`: Name of the embedding model for calculating replacement similarity.
     It must be compatible with the [Sentence Transformers library](https://www.sbert.net/), such as ["paraphrase-albert-base-v2"](https://huggingface.co/sentence-transformers/paraphrase-albert-base-v2).
@@ -287,12 +289,13 @@ The configurable parameters are:
 
 #### NMI
 It compares the K-means++ clustering resulting from the original corpus to that resulting from the anonymized documents.
-Normalized Mutual Information (NMI) is employed for assessing clustering similarity.
+**Normalized Mutual Information (NMI)** is employed for assessing clustering similarity.
 This approach allows to measure empirical utility preservation for the generic downstream task of clustering.
-This metric was proposed in [Truthful Text Sanitization Guided by Inference Attacks](https://arxiv.org/abs/2412.12928).
+This metric was proposed in [Pilán et al., Truthful Text Sanitization Guided by Inference Attacks, Submitted, 2024](https://arxiv.org/abs/2412.12928).
 Clustering is repeated multiple times for minimizing the impact of randomness.
 Furthermore, for this particular implementation, clustering is carried out with multiple Ks increased linearly.
 The returned results are those corresponding to the K which provided the best [silouhette score](https://www.sciencedirect.com/science/article/pii/0377042787901257) in original texts clustering.
+
 The configurable parameters are:
 * `embedding_model_name | String | Default="all-MiniLM-L6-v2"`: Name of the embedding model to use for document vectorial representation.
     It must be compatible with the [Sentence Transformers library](https://www.sbert.net/), such as ["all-MiniLM-L6-v2"](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2).
@@ -316,7 +319,7 @@ The configurable parameters are:
 #### Recall
 Standard privacy proxy for text anonymization.
 It measures the percentage of terms masked by the **manual annotations** that were also masked by the anonymizations.
-TAE's implementation follows the version proposed in [The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization](https://aclanthology.org/2022.cl-4.19/), which allows for multi-annotated documents (performing a micro-average over annotators), token-level and mention-level assessment and independent consideration of direct and quasi identifiers.
+TAE's implementation follows the version proposed in [Pilán et al., The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization, Computational Linguistics, 2022](https://aclanthology.org/2022.cl-4.19/), which allows for multi-annotated documents (performing a micro-average over annotators), token-level and mention-level assessment and independent consideration of direct and quasi identifiers.
 The configurable parameters are:
 * `token_level | Boolean | Default=True`: If set to `True`, recall is computed at the level of tokens, otherwise it is at the mention-level.
   The latter implies that the whole human-annotated mention (rather than some tokens) needs to be masked for being considered a true positive.
@@ -325,102 +328,100 @@ The configurable parameters are:
 
 
 #### RecallPerEntityType
-Proposed in []().
+It computes [Recall](#recall) factored by the `entity_type` in the **manual annotations**, enabling a fine-grained analysis.
+TAE's implementation follows the version proposed in [Pilán et al., The Text Anonymization Benchmark (TAB): A Dedicated Corpus and Evaluation Framework for Text Anonymization, Computational Linguistics, 2022](https://aclanthology.org/2022.cl-4.19/), which allows for multi-annotated documents (performing a micro-average over annotators), token-level and mention-level assessment and independent consideration of direct and quasi identifiers.
+The configurable parameters are:
+* `token_level | Boolean | Default=True`: If set to `True`, recall is computed at the level of tokens, otherwise it is at the mention-level.
+  The latter implies that the whole human-annotated mention (rather than some tokens) needs to be masked for being considered a true positive.
+* `include_direct | Boolean | Default=True`: Whether to consider direct identifiers in the metric computation.
+* `include_quasi | Boolean | Default=True`: Whether to include quasi identifiers in the metric computation.
 
 #### TRIR
-Proposed in []().
+It simulates a **Text Re-Identification Attack (TRIA)** on the anonymized documents in order to measure their **Text Re-Identification Risk (TRIR)**.
+Introduced in [Manzanares-Salor et al., Evaluating the disclosure risk of anonymized documents via a machine learning-based re-identification attack, Data Mining and Knowledge Discovery, 2024](https://link.springer.com/article/10.1007/s10618-024-01066-3), this metric evaluates privacy protection focusing on the key factor of *empirical re-identification probability*.
+TRIA builds on the same principles as record linkage attacks, which are widely used for assessing disclosure risk in structured data.
+The approach assumes that an attacker possesses background knowledge (BK) consisting of public information about a *non-strict* superset of the protected individuals. 
+Using this knowledge, the attacker trains a classifier to associate documents with individuals, and then applies the model to anonymized documents in an attempt to link them to the correct individuals from the BK.
+TRIR is defined as the accuracy of this linkage process.
 
-##### Data
-* **Mandatory configurations (generally belonging to Data reading)**:
-  * **output_folder_path | String | MANDATORY**: Determines the folder were results will be stored (see [Results section](#results)). The folder will be created if it does not exist.
-  * **data_file_path | String | MANDATORY**: Path to the data file to use. That file is expected to define a Pandas dataframe stored in JSON or CSV format containing three types of columns:
-    * *Individual name*: One column with the names of all the individuals. Column named as defined in the `individual_name_column` setting. In the nomenclature of our method, this column allows to define both $A_I$ and $B_I$.
-    * *Background knowledge*: One column with the background knowledge (i.e., public document) available for each individual. Column named as defined in the `background_knowledge_column` setting. This will be used for training the re-identification attack. If a cell of this column is empty (e.g., `""`, `NaN`, `None` or `null`) it is considered that no background knowledge is available for the individual. In the nomenclature of our method, this column determines $B_D$, and all the individuals in the individual name column that have background knowledge define $B_I$.
-    * *Anonymized document set*: At least one column should be anonymized texts corresponding to the individuals. Each column represents the output of an anonymization method for documents related with the individual of the same row. The re-identification risk will be computed for each anonymizaiton methods so, since all of them are applied to the same documents, it allows to compare the privacy protection provided by the approaches. In the nomenclature of our method, this column determines $A_D$, and all the individuals in the individual name column with an anonymized document (instead of being empty) define $A_I$.
+This metric requires **two mandatory parameters**:
+* `background_knowledge_file_path | String`: Path to the background knowledge JSON file (*e.g.*, ["data/tab/bk/TAB_test_BK=Public.json"](data/tab/bks/TAB_test_BK=Public.json)). The file must contain a dictionary of background knowledge documents where:
+  * *key* is the `doc_id` of the document. Since the BK comprehends a *non-strict* superset of the protected individuals, some `doc_id`s may not appear in the corpus and not all corpus `doc_id`s will necessarily be present in the BK.
+  * *value* is the textual content of the document.
+* `output_folder_path | String`: Path to the folder (*e.g.*, `"outputs/tab/TAB_test_BK=Public"`) where some **partial outputs** (e.g., curated data, trained model...) will be stored.
+  If the folder or its containing folders are missing, they will be created.
+  These outputs can be reused in later executions to compute different TRIR variants (*i.e.*, by adjusting optional parameters detailed below) without re-running the entire process.
 
-    WARNING: A column for indexes (default when exporting from Pandas to CSV) will make the program fail, creating an "Unnamed" anonymized documents set containing numbers.  
-    Example of a dataframe with **three** individuals, each of them with background knowledge (except the last) and a document protected with **two** different anonymized methods (Method1 and Method2):
-
-    | name            | public_knowledge                                 | Method1                                                  | Method2                                            |
-    |-----------------|--------------------------------------------------|------------------------------------------------------------------------|------------------------------------------------------------------|
-    | Joe Bean      | Popular tweet: I built my own fortune!           | Bean received funding from his family to found ORG. | PERSON received funding from DEM to found UnderPants.      |
-    | Ebenezer Lawson | Evebezer Lawson is a popular writer from Kansas. | PERSON, born in LOCATION, has written multiple best-sellers.            | Lawson, born in Kansas, has MISC multiple MISC.                   |
-    | Ferris Knight   | NaN                                              | After a long race, PERSON managed to obtain the first position.        | After a EVENT, PERSON managed to obtain the first position. |
-
-    Since no public knowledge has been provided for Ferris Knight, the TRI model will not have samples of her in the training set. Subsequently, it is expected to fail the re-identification of her anonymized texts, limiting the re-identification risk for Method1 and Method2 to 66.66%.
-
-  * **individual_name_column | String | MANDATORY**: Name of the dataframe column corresponding to the individual or organizaiton name. In the previous example, it will be `name`.
-  * **background_knowledge_column | String | MANDATORY**: Name of the column corresponding to the background knowledge document for each individual. In the previous example, it will be `public_knowledge`. The rest of columns not named as defined in `individual_name_column` or `background_knowledge_column` will be considered as texts anonymized with different methods (one method per column) for evaluating the re-identification risk.
-
-* **Load pretreatment**:
-  * **load_saved_pretreatment | Boolean | Default=True**: If the `Pretreated_Data.json` file exists in the `output_folder_path`, load that data instead of running the pretreatment. Disable it if you completely changed the `data_file_path`. It requires a previous execution with `save_pretreatment=True`.
-  * **add_non_saved_anonymizations | Boolean | Default=True**: When loading pretreatment data from `Pretreated_Data.json`, this setting checks whether the file at `data_file_path` includes new anonymizations that need to be processed. If new anonymizations are found, they are loaded and, if `use_document_curation` is true, only these new anonymizations will undergo curation. This option is particularly useful if you have added new anonymizations to the dataframe at `data_file_path` and want to avoid repeating the entire pretreatment.
+**Additionally, TRIR has several optional parameters, detailed in the following.**
 
 * **Data pretreatment**:
   * **Anonymized background knowledge**:
-    * **ANONIMIZE_BACKGROUND_KNOWLEDGE | Boolean | Default=True**: If during document pretreatment generate an anonymized version of the background knowledge documents using [spaCy NER](https://spacy.io/api/entityrecognizer) that would be used along with the non-anonymized version. Its usage is strongly recommended, since it can significantly improve re-identification risks. As a counterpoint, it roughly duplicates the training samples, incrementing the training time and RAM consumsumption.
-    * **only_use_anonymized_background_knowledge | Boolean | Default=False**: If only using the anonymized version of the background knowledge, instead of concatenating it with the non-anonymized version. This usually results in higher re-identification risks than using only the non-anonymized version, but lower than using both (anonymized and non-anonymized). Created for an ablation study.
+    * `anonymize_background_knowledge | Boolean | Default=True`: If during document pretreatment generate an anonymized version of the background knowledge documents using [spaCy NER](https://spacy.io/api/entityrecognizer) that would be used along with the non-anonymized version. Its usage is strongly recommended, since it can significantly improve re-identification risks. As a counterpoint, it roughly duplicates the training samples, incrementing the training time and RAM consumsumption.
+    * `only_use_anonymized_background_knowledge | Boolean | Default=False`: If only using the anonymized version of the background knowledge, instead of concatenating it with the non-anonymized version. This usually results in higher re-identification risks than using only the non-anonymized version, but lower than using both (anonymized and non-anonymized). Created for an ablation study.
   * **Document curation**:
-    * **use_document_curation | Boolean | Default=True**: Whether to perform the document curation, consisting of lemmatization and removing of stopwords and special characters. It is inexpensive compared to pretraining or finetuning.
+    * `use_document_curation | Boolean | Default=True`: Whether to perform the document curation, consisting of lemmatization and removing of stopwords and special characters. It is inexpensive compared to pretraining or finetuning.
 
 * **Save pretreatment**:
-  * **save_pretreatment | Boolean | Default=True**: Whether to save the data after pretreatment. A JSON file name `Pretreated_Data.json` will be generated and stored in the `output_folder_path` folder. As pretreatment it is also included the curation of new anonymizations caused by `updated_loaded_eval_pretreatment=True`.
+  * `save_pretreatment | Boolean | Default=True`: Whether to save the data after pretreatment. A JSON file name `Pretreated_Data.json` will be generated and stored in the `output_folder_path` folder. As pretreatment it is also included the curation of new anonymizations caused by `updated_loaded_eval_pretreatment=True`.
 
-##### Build classifier
+* **Load pretreatment**:
+  * `load_saved_pretreatment | Boolean | Default=True`: If the `Pretreated_Data.json` file exists in the `output_folder_path`, load that data instead of running the pretreatment. Disable it if you completely changed the `corpus` or `anonymizations`. It requires a previous execution with `save_pretreatment=True`.
+  * `add_non_saved_anonymizations | Boolean | Default=True`: When loading pretreatment data from `Pretreated_Data.json`, this setting checks whether new `anonymizations` to be processed appeared. If new anonymizations are found, they are loaded and, if `use_document_curation` is true, only these new anonymizations will undergo curation. This option is particularly useful to avoid repeating the entire pretreatment.
+
+
 * **Load already trained TRI model**:
-  * **load_saved_finetuning | Boolean | Default=True**: If the `TRI_Pipeline` exists in the `output_folder_path` directory and contains the model file `model.safetensors`, load that already trained TRI model instead of running the additional pretraining and finetuning. It requires a previous execution with `save_finetuning=True`.
+  * `load_saved_finetuning | Boolean | Default=True`: If the `TRI_Pipeline` exists in the `output_folder_path` directory and contains the model file `model.safetensors`, load that already trained TRI model instead of running the additional pretraining and finetuning. It requires a previous execution with `save_finetuning=True`.
 * **Create base language model**:
-  * **base_model_name | String | Default="distilbert-base-uncased"**: Name of the base language model in the [HuggingFace's Transformers library](https://huggingface.co/docs/transformers/index) to be used for both additional pretraining and finetuning. Current code is designed for versions of BERT, DistilBERT and RoBERTa. Examples: "distilbert-base-uncased", "distilbert-base-cased", "bert-base-uncased", "bert-base-cased" and "roberta-base". The `ini_extended_model` method from the TRI class (in [tri.py](tri.py)) can be easily modified for other models.
-  * **tokenization_block_size | Integer | Default=250**: Number of data samples tokenized at once with [Transformers' tokenizer](https://huggingface.co/docs/transformers/en/main_classes/tokenizer). This is done for limiting and optimizing RAM usage when processing large datasets. The value of 250 is roughly optimized for 32GB of RAM.
+  * `base_model_name | String | Default="distilbert-base-uncased"`: Name of the base language model in the [HuggingFace's Transformers library](https://huggingface.co/docs/transformers/index) to be used for both additional pretraining and finetuning. Current code is designed for versions of BERT, DistilBERT and RoBERTa. Examples: "distilbert-base-uncased", "distilbert-base-cased", "bert-base-uncased", "bert-base-cased" and "roberta-base". The `ini_extended_model` method from the TRI class (in [tae/tri.py](tae/tri.py)) can be easily modified for other models.
+  * `tokenization_block_size | Integer | Default=250`: Number of data samples tokenized at once with [Transformers' tokenizer](https://huggingface.co/docs/transformers/en/main_classes/tokenizer). This is done for limiting and optimizing RAM usage when processing large datasets. The value of 250 is roughly optimized for 32GB of RAM.
 * **Additional pretraining**:
-  * **use_additional_pretraining | Boolean | Default=True**: Whether additional pre-training (i.e. Masked Language Modeling, MLM) is to be performed to the base language model. Its usage is recommended, since it is inexpensive (compared to finetuning) and can improve re-identification risks.
-  * **save_additional_pretraining | Boolean | Default=True**: Whether to save the additionally pretrained language model. The model will be saved as a PyTorch model file `Pretrained_Model.pt` in the `output_folder_path`.
-  * **load_saved_pretraining | Boolean | Default=True**: If `use_additional_pretraining` is true and the `Pretrained_Model.pt` file exists, loads that additionally pretrained base model instead of running the process. It requires a previous execution with `save_additional_pretraining=True`.
-  * **pretraining_epochs | Integer | Default=3**: Number of additional pretraining epochs.
-  * **pretraining_batch_size | Integer | Default=8**: Size of the batches for additional pretraining.
-  * **pretraining_learning_rate | Float | Default=5e-05**: Learning rate for the [AdamW optimizer](https://huggingface.co/docs/bitsandbytes/main/en/reference/optim/adamw) to use during additional pretraining.
-  * **pretraining_mlm_probability | Float | Default=0.15**: Probability of masking tokens by the [Data Collator](https://huggingface.co/docs/transformers/main_classes/data_collator#transformers.DataCollatorForLanguageModeling.mlm_probability) during the additional pretraining with MLM.
-  * **pretraining_sliding_window | String | Default="512-128"**: Sliding window configuration for additional pretraining. Since input documents are assumed to be longer than the maximum number of tokens processable by the language model (maximum sequence length), the text is split into multiple samples. A sliding window mechasim has been implemented, defined by the size of the window and the overlap with the previous window. For instance, use "512-128" for samples/splits of 512 tokens and an overlap of 128 tokens with the previous split/sample. Alternatevely, if "No" is used, one sample/split per sentence will be created, leveraging that sentences are generally shorter than the model maximum sequence length. Reducing the window size and/or incrementing the overlap will result in more samples/splits, what increments the training time.
+  * `use_additional_pretraining | Boolean | Default=True`: Whether additional pre-training (i.e. Masked Language Modeling, MLM) is to be performed to the base language model. Its usage is recommended, since it is inexpensive (compared to finetuning) and can improve re-identification risks.
+  * `save_additional_pretraining | Boolean | Default=True`: Whether to save the additionally pretrained language model. The model will be saved as a PyTorch model file `Pretrained_Model.pt` in the `output_folder_path`.
+  * `load_saved_pretraining | Boolean | Default=True`: If `use_additional_pretraining` is true and the `Pretrained_Model.pt` file exists, loads that additionally pretrained base model instead of running the process. It requires a previous execution with `save_additional_pretraining=True`.
+  * `pretraining_epochs | Integer | Default=3`: Number of additional pretraining epochs.
+  * `pretraining_batch_size | Integer | Default=8`: Size of the batches for additional pretraining.
+  * `pretraining_learning_rate | Float | Default=5e-05`: Learning rate for the [AdamW optimizer](https://huggingface.co/docs/bitsandbytes/main/en/reference/optim/adamw) to use during additional pretraining.
+  * `pretraining_mlm_probability | Float | Default=0.15`: Probability of masking tokens by the [Data Collator](https://huggingface.co/docs/transformers/main_classes/data_collator#transformers.DataCollatorForLanguageModeling.mlm_probability) during the additional pretraining with MLM.
+  * `pretraining_sliding_window | String | Default="512-128"`: Sliding window configuration for additional pretraining. Since input documents are assumed to be longer than the maximum number of tokens processable by the language model (maximum sequence length), the text is split into multiple samples. A sliding window mechasim has been implemented, defined by the size of the window and the overlap with the previous window. For instance, use "512-128" for samples/splits of 512 tokens and an overlap of 128 tokens with the previous split/sample. Alternatevely, if "No" is used, one sample/split per sentence will be created, leveraging that sentences are generally shorter than the model maximum sequence length. Reducing the window size and/or incrementing the overlap will result in more samples/splits, what increments the training time.
 * **Finetuning**:
-  * **finetuning_epochs | Integer | Default=15**: Number of epochs to perform during the finetuning.
-  * **finetuning_batch_size | Integer | Default=16**: Size of the batches for finetuning.
-  * **finetuning_learning_rate | Float | Default=5e-05**: Learning rate for the [AdamW optimizer](https://huggingface.co/docs/bitsandbytes/main/en/reference/optim/adamw) to use during finetuning.
-  * **finetuning_sliding_window | String | Default="100-25"**: Sliding window configuration for finetuning. Since input documents are assumed to be longer than the maximum number of tokens processable by the language model (maximum sequence length), the text is split into multiple samples. A sliding window mechasim has been implemented, defined by the size of the window and the overlap with the previous window. For example, use "512-128" for samples/splits of 512 tokens and an overlap of 128 tokens with the previous split/sample. Alternatevely, if "No" is used, one sample/split per sentence will be created, leveraging that sentences are generally shorter than the model maximum sequence length. Reducing the window size and/or increasing the overlap will result in more samples/splits, what increments the training time.
-  * **dev_set_column_name | String | Default=False**: Specifies the column name to be used for model selection. If set to `False` (boolean, not string), the model with the highest average accuracy across all anonymization sets will be selected as the final model. If a column name is provided, the accuracy corresponding to that specific anonymization from the dataframe located at `data_file_path` will be used to choose the best model.
-  * **save_finetuning | Boolean | Default=True**: Whether to save the TRI model after the finetuning. The model will be saved as a [Transformers' pipeline](https://huggingface.co/docs/transformers/main_classes/pipelines), creating a folder `TRI_Pipeline` in the `output_folder_path` directory, containing the model file `model.safetensors`.
+  * `finetuning_epochs | Integer | Default=15`: Number of epochs to perform during the finetuning.
+  * `finetuning_batch_size | Integer | Default=16`: Size of the batches for finetuning.
+  * `finetuning_learning_rate | Float | Default=5e-05`: Learning rate for the [AdamW optimizer](https://huggingface.co/docs/bitsandbytes/main/en/reference/optim/adamw) to use during finetuning.
+  * `finetuning_sliding_window | String | Default="100-25"`: Sliding window configuration for finetuning. Since input documents are assumed to be longer than the maximum number of tokens processable by the language model (maximum sequence length), the text is split into multiple samples. A sliding window mechasim has been implemented, defined by the size of the window and the overlap with the previous window. For example, use "512-128" for samples/splits of 512 tokens and an overlap of 128 tokens with the previous split/sample. Alternatevely, if "No" is used, one sample/split per sentence will be created, leveraging that sentences are generally shorter than the model maximum sequence length. Reducing the window size and/or increasing the overlap will result in more samples/splits, what increments the training time.
+  * `dev_set_column_name | String | Default=False`: Specifies the anonymization from [anonymizations](#anonymizations) to be used for model selection. If set to `False` (boolean, not string), the model with the highest average accuracy across all anonymization sets will be selected as the final model. If an actual name is provided, the accuracy corresponding to that specific anonymization will be used to choose the best model.
+  * `save_finetuning | Boolean | Default=True`: Whether to save the TRI model after the finetuning. The model will be saved as a [Transformers' pipeline](https://huggingface.co/docs/transformers/main_classes/pipelines), creating a folder `TRI_Pipeline` in the `output_folder_path` directory, containing the model file `model.safetensors`.
+
 
 ##### Results
-After execution of TRI (both from CLI or Python code), in the `output_folder_path` you can find the following files:
-* **Pretreated_Data.json**: If `save_pretreatment` is true, this file is created for saving the pretreated background knowledge and protected documents, sometimes referred as training and evaluation data, respectively. Leveraged if `load_saved_pretreatment` is true.
-* **Pretrained_Model.pt**: If `save_additional_pretraining` is true, this file is created for saving the additionally pretrained language model. Leveraged if `load_saved_pretraining` is true.
-* **TRI_Pipeline**: If `save_finetuning` is true, this folder is created for saving the . Leveraged if `load_saved_finetuning` is true.
-* **Results.csv**: After each epoch of finetuning, the Text Re-Identification Risk (TRIR) resulting from each anonymization method will be evaluated. These results are stored (always appending, not overwriting) in a CSV file named `Results.csv`. This file contains the epoch time, epoch number, the TRIR for each anonymization method and the average TRIR. for instance, if using the dataframe exemplified in the `data_file_path` configuration description, TRIR results will correspond to Method1 and Method2:
+After execution of TRIR, in the `output_folder_path` you can find the following files:
+* `Pretreated_Data.json`: If `save_pretreatment` is true, this file is created for saving the pretreated background knowledge and protected documents, sometimes referred as training and evaluation data, respectively. Leveraged if `load_saved_pretreatment` is true.
+* `Pretrained_Model.pt`: If `save_additional_pretraining` is true, this file is created for saving the additionally pretrained language model. Leveraged if `load_saved_pretraining` is true.
+* `TRI_Pipeline`: If `save_finetuning` is true, this folder is created for saving the resulting classification pipeline. Leveraged if `load_saved_finetuning` is true.
+* `Results.csv`: After each epoch of finetuning, the TRIR resulting from each anonymization method will be evaluated. These results are stored (always appending, not overwriting) in a CSV file named `Results.csv`. This file contains the epoch time, epoch number, the TRIR for each anonymization method and the average TRIR. The following table exemplifies TRIR results for three epochs and three methods:
   | Time                | Epoch | Method1 | Method2 | Average |
   | ------------------- | ----- | ------- | ------- | ------- |
   | 01/08/2024 08:50:04 | 1     | 74      | 36      | 55      |
   | 01/08/2024 08:50:37 | 2     | 92      | 44      | 68      |
   | 01/08/2024 08:50:10 | 3     | 94      | 48      | 71      |
 
-  At the end of the program, TRIR is predicted for all the anonymization methods using the best TRI model considering the criteria defined for the setting `dev_set_column_name`. This final evaluation is also stored in the `Results.csv` file as an "additional epoch".
+  At the end of the program, TRIR is predicted for all the anonymization methods using the best TRI model, employing the criteria defined for the setting `dev_set_column_name`. This final evaluation is also stored in the `Results.csv` file as an "additional epoch".
 
 
 ## Results
-* `results_file_path | String`: Path to the CSV results file.  
-  This parameter can be provided either through the JSON configuration file [from CLI](#from-cli), or by using the `TAE.evaluate` function when running [from code](#from-code).
+* `results_file_path | String`: Path to the CSV file containing the results.  
+  This value can be specified either in the JSON configuration file [from CLI](#from-cli) or directly via the `TAE.evaluate` function when running [from code](#from-code).
 
-  During the execution of `TAE.evaluate`, the obtained results will be appended to this CSV file. If the file or its containing folders are missing, they will be created. The file follows the format below:
-  * *Header*: The first column is "Metric/Anonymization," followed by one column for each `anonymization_name` defined in [Anonymizations](#anonymizations).
-  * *Metric result*: One row for each valid metric defined in [Metrics](#metrics), with the `metric_name` in the first column and the anonymization results in the remaining columns.
+  While executing `TAE.evaluate`, the computed metric results are appended to this CSV file.  
+  If the file or its parent directories do not exist, they will be created automatically.  
+  The file is structured as follows:
+    * *Header*: The first column stores the datetime, the second column is labeled "Metric/Anonymization" and then one column per `anonymization_name` defined in [anonymizations](#anonymizations).
+    * *Metric result*: Each row corresponds to a valid metric defined in [metrics](#metrics). The first column holds the datetime, the second contains the `metric_name`, and the remaining columns hold the results for each anonymization.
 
-  Here is an example of a result table for three metrics and two anonymizations:
+  Example of a result table with three metrics and two anonymizations:
+  | 2025-08-22 11:02:33 | Metric/Anonymization | Anonymization1 | Anonymization2 |
+  |---------------------|----------------------|----------------|----------------|
+  | 2025-08-22 11:04:21 | TPS                  | 0.86           | 0.73           |
+  | 2025-08-22 11:05:42 | NMI                  | 0.62           | 0.55           |
+  | 2025-08-22 11:10:27 | TRIR                 | 0.17           | 0.12           |
 
-  | Metric/Anonymization | Anonymization1 | Anonymization2 |
-  |----------------------|----------------|----------------|
-  | TPS                  | 0.86           | 0.73           |
-  | NMI                  | 0.62           | 0.55           |
-  | TRIR                 | 0.17           | 0.10           |
-
-
-*NOTE: When running [from code](#from-code), the `TAE.evaluate` function also returns the results in a dictionary, keys being the `metric_name` and values being another dictionary mapping `anonymization_name` to the obtained value.*
-
-
+*NOTE: When executed [from code](#from-code), the `TAE.evaluate` function also returns the results as a dictionary, keys being the corresponding `metric_name` and values being another dictionary mapping `anonymization_name` to the obtained value.*
