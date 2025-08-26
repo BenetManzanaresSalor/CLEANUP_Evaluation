@@ -71,13 +71,13 @@ Our implementation uses [Python 3.9.19](https://www.python.org/downloads/release
 If you want to use TAE from CLI (see [Usage section](#usage-examples) for details), we recommend to install it from source following the next steps:
 1. Download or clone this repository:
     ```console
-    git clone https://github.com/NorskRegnesentral/text-anonymization-evaluator
-    cd text-anonymization-evaluator
+    git clone https://github.com/BenetManzanaresSalor/CLEANUP_Evaluation
+    cd CLEANUP_Evaluation
     ```
 2. Install dependencies:
     * Option A: Using Conda 
         * Install [Conda](https://docs.conda.io/en/latest/) if you haven't already.
-        * Create a new Conda environment using the [environment.yml](environment.yml) file (channels included for ensuring that specific versions can be installed):
+        * Create a new Conda environment using the [environment.yml](environment.yml) file (channels are included for ensuring that specific versions can be installed):
             ```console
             conda create --name ENVIRONMENT_NAME --file environment.yml -c conda-forge -c spacy -c pytorch -c nvidia -c huggingface -c numpy -c pandas
             ```
