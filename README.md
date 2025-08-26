@@ -93,7 +93,7 @@ If you want to use TAE from CLI (see [Usage section](#usage-examples) for detail
 ## From PyPi
 If you want to use TAE from code (see [Usage section](#usage-examples) for details), we recommend installing it from PyPi via Pip with the following command:
 ```console
-pip install taeval
+pip install taeval #NOTE: It does not work because the package has not yet been uploaded to PyPi.
 ```
 
 
